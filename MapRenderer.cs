@@ -222,6 +222,16 @@ namespace MeteoSrazky
                                             ? NearestGridValue(x + 0.5, y + 0.5, renderPts)
                                             : InterpolateIdw(x + 0.5, y + 0.5, renderPts);
                                         Color c = GetValueColor(val, result.Parameter);
+
+                                        // UTCI warning hatch overlay for areas >= threshold
+                                        if (result.Parameter == WeatherParameter.UtciMax &&
+                                            result.UtciWarningThreshold.HasValue &&
+                                            val >= result.UtciWarningThreshold.Value &&
+                                            ((x + y) % 7 < 2))
+                                        {
+                                            c = Color.FromArgb(220, 38, 38);
+                                        }
+
                                         pixels[idx] = c.B;
                                         pixels[idx + 1] = c.G;
                                         pixels[idx + 2] = c.R;
@@ -282,12 +292,34 @@ namespace MeteoSrazky
 
                             double? val;
                             valuesByRegion.TryGetValue(r.Code, out val);
-                            string label = r.Code + ": " + (val.HasValue ? val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + unit : "N/A");
+                            bool isWarn = result.Parameter == WeatherParameter.UtciMax &&
+                                          result.UtciWarningThreshold.HasValue &&
+                                          val.HasValue &&
+                                          val.Value >= result.UtciWarningThreshold.Value;
+
+                            string valStr = !val.HasValue
+                                ? "N/A"
+                                : (result.Parameter == WeatherParameter.SignificantWeather
+                                    ? CzechData.GetWmoShortLabel(val.Value)
+                                    : val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + unit);
+                            string label = (isWarn ? "⚠ " : "") + r.Code + ": " + valStr;
                             SizeF sz = g.MeasureString(label, valFont);
 
                             RectangleF pill = new RectangleF(p.X - sz.Width / 2f - 5f, p.Y + offsetY, sz.Width + 10f, sz.Height + 2f);
-                            g.FillRectangle(pillBg, pill);
-                            g.DrawRectangle(pillBorder, pill.X, pill.Y, pill.Width, pill.Height);
+                            if (isWarn)
+                            {
+                                using (var warnBg = new SolidBrush(Color.FromArgb(245, 254, 226, 226)))
+                                using (var warnPen = new Pen(Color.FromArgb(220, 38, 38), 1.8f))
+                                {
+                                    g.FillRectangle(warnBg, pill);
+                                    g.DrawRectangle(warnPen, pill.X, pill.Y, pill.Width, pill.Height);
+                                }
+                            }
+                            else
+                            {
+                                g.FillRectangle(pillBg, pill);
+                                g.DrawRectangle(pillBorder, pill.X, pill.Y, pill.Width, pill.Height);
+                            }
                             g.DrawString(label, valFont, textBrush, pill.X + 5f, pill.Y + 1f);
                         }
                     }
@@ -328,6 +360,39 @@ namespace MeteoSrazky
             using (var textBrush = new SolidBrush(Color.FromArgb(30, 41, 59)))
             {
                 g.DrawString(legendTitle, labelFont, textBrush, 30, barY + 6);
+
+                if (param == WeatherParameter.SignificantWeather)
+                {
+                    var sigStops = new[] {
+                        Tuple.Create(0.0, "Jasno"),
+                        Tuple.Create(3.0, "Oblačno"),
+                        Tuple.Create(45.0, "Mlha"),
+                        Tuple.Create(53.0, "Mrhol."),
+                        Tuple.Create(63.0, "Déšť"),
+                        Tuple.Create(73.0, "Sníh"),
+                        Tuple.Create(81.0, "Přeh."),
+                        Tuple.Create(95.0, "Bouřka")
+                    };
+                    int sx = 120;
+                    foreach (var st in sigStops)
+                    {
+                        Color c = GetValueColor(st.Item1, param);
+                        using (var b = new SolidBrush(c))
+                        using (var p = new Pen(Color.FromArgb(148, 163, 184), 1f))
+                        {
+                            g.FillRectangle(b, sx, barY + 5, 42, 18);
+                            g.DrawRectangle(p, sx, barY + 5, 42, 18);
+                        }
+                        g.DrawString(st.Item2, smallFont, textBrush, sx + 1, barY + 26);
+                        sx += 48;
+                    }
+                    string sigStats = max.HasValue
+                        ? "Nejvýraznější jev v ČR: " + CzechData.GetWmoShortLabel(max.Value) + " (WMO " + ((int)Math.Round(max.Value)) + ")"
+                        : "Data nejsou pro tento model k dispozici.";
+                    SizeF sigSize = g.MeasureString(sigStats, labelFont);
+                    g.DrawString(sigStats, labelFont, textBrush, width - 30 - sigSize.Width, barY + 12);
+                    return;
+                }
 
                 double[] stops = GetLegendStops(param);
                 int x = 185;
@@ -410,6 +475,8 @@ namespace MeteoSrazky
                 case WeatherParameter.WindGusts10m:
                 case WeatherParameter.WindSpeed10m:
                     return new double[] { 10, 20, 30, 40, 50, 65, 80, 100 };
+                case WeatherParameter.UtciMax:
+                    return new double[] { -13, 0, 9, 20, 26, 32, 38, 46 };
                 default:
                     return new double[] { 0, 0.1, 0.5, 1, 2, 5, 10, 15, 20, 30, 50 };
             }
@@ -462,6 +529,27 @@ namespace MeteoSrazky
                     if (val < 80.0) return Color.FromArgb(239, 68, 68);
                     if (val < 100.0) return Color.FromArgb(192, 38, 211);
                     return Color.FromArgb(126, 34, 206);
+
+                case WeatherParameter.UtciMax:
+                    if (val < -13.0) return Color.FromArgb(30, 58, 138);   // Strong cold stress
+                    if (val < 0.0) return Color.FromArgb(59, 130, 246);    // Moderate cold stress
+                    if (val < 9.0) return Color.FromArgb(147, 197, 253);   // Slight cold stress
+                    if (val < 26.0) return Color.FromArgb(134, 239, 172);  // No thermal stress
+                    if (val < 32.0) return Color.FromArgb(253, 224, 71);   // Moderate heat stress
+                    if (val < 38.0) return Color.FromArgb(249, 115, 22);   // Strong heat stress
+                    if (val < 46.0) return Color.FromArgb(220, 38, 38);    // Very strong heat stress
+                    return Color.FromArgb(153, 27, 27);                    // Extreme heat stress
+
+                case WeatherParameter.SignificantWeather:
+                    int wmo = (int)Math.Round(val);
+                    if (wmo <= 1) return Color.FromArgb(254, 249, 195);    // Clear / mostly clear
+                    if (wmo <= 3) return Color.FromArgb(203, 213, 225);    // Cloudy / overcast
+                    if (wmo <= 48) return Color.FromArgb(253, 230, 138);   // Fog
+                    if (wmo <= 57) return Color.FromArgb(167, 243, 208);   // Drizzle
+                    if (wmo <= 67) return Color.FromArgb(56, 189, 248);    // Rain / freezing rain
+                    if (wmo <= 77) return Color.FromArgb(192, 132, 252);   // Snow
+                    if (wmo <= 86) return Color.FromArgb(168, 85, 247);    // Showers
+                    return Color.FromArgb(239, 68, 68);                    // Thunderstorm
 
                 default:
                     if (val <= 0.05) return Color.FromArgb(241, 245, 249);

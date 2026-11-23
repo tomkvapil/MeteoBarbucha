@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 
@@ -76,8 +77,26 @@ namespace MeteoSrazky
             new WeatherParameterInfo { Parameter = WeatherParameter.Temperature850hPa, DisplayName = "Teplota v 850 hPa (°C)", MapTitle = "Teplota v 850 hPa ČR", LegendTitle = "T850 (°C):", Unit = "°C", DailyVar = "temperature_850hPa", HourlyVar = "temperature_850hPa", ForceHourly = true, Aggregation = TimeAggregation.Mean, FilePrefix = "t850" },
             new WeatherParameterInfo { Parameter = WeatherParameter.CloudCover, DisplayName = "Oblačnost (%)", MapTitle = "Průměrná oblačnost ČR", LegendTitle = "Oblačnost (%):", Unit = "%", DailyVar = "cloud_cover_mean", HourlyVar = "cloud_cover", Aggregation = TimeAggregation.Mean, FilePrefix = "oblacnost" },
             new WeatherParameterInfo { Parameter = WeatherParameter.WindGusts10m, DisplayName = "Nárazy větru 10m (km/h)", MapTitle = "Max. nárazy větru ČR", LegendTitle = "Nárazy (km/h):", Unit = "km/h", DailyVar = "wind_gusts_10m_max", HourlyVar = "wind_gusts_10m", Aggregation = TimeAggregation.Max, FilePrefix = "narazy_vetru" },
-            new WeatherParameterInfo { Parameter = WeatherParameter.WindSpeed10m, DisplayName = "Rychlost větru 10m (km/h)", MapTitle = "Max. rychlost větru ČR", LegendTitle = "Vítr (km/h):", Unit = "km/h", DailyVar = "wind_speed_10m_max", HourlyVar = "wind_speed_10m", Aggregation = TimeAggregation.Max, FilePrefix = "vitr" }
+            new WeatherParameterInfo { Parameter = WeatherParameter.WindSpeed10m, DisplayName = "Rychlost větru 10m (km/h)", MapTitle = "Max. rychlost větru ČR", LegendTitle = "Vítr (km/h):", Unit = "km/h", DailyVar = "wind_speed_10m_max", HourlyVar = "wind_speed_10m", Aggregation = TimeAggregation.Max, FilePrefix = "vitr" },
+            new WeatherParameterInfo { Parameter = WeatherParameter.UtciMax, DisplayName = "UTCI — Max. tepelná zátěž (°C)", MapTitle = "Max. UTCI (tepelná zátěž) ČR", LegendTitle = "UTCI (°C):", Unit = "°C", DailyVar = "temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation", HourlyVar = "temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation", ForceHourly = true, Aggregation = TimeAggregation.Max, FilePrefix = "utci" },
+            new WeatherParameterInfo { Parameter = WeatherParameter.SignificantWeather, DisplayName = "Significant Weather — Významné počasí (WMO)", MapTitle = "Significant Weather ČR", LegendTitle = "Počasí:", Unit = "WMO", DailyVar = "weather_code", HourlyVar = "weather_code", Aggregation = TimeAggregation.Max, FilePrefix = "sigwx" }
         };
+
+        public static string GetWmoShortLabel(double code)
+        {
+            int c = (int)Math.Round(code);
+            if (c <= 0) return "Jasno";
+            if (c <= 2) return "Polojasno";
+            if (c == 3) return "Zataženo";
+            if (c <= 48) return "Mlha";
+            if (c <= 57) return "Mrholení";
+            if (c <= 65) return "Déšť";
+            if (c <= 67) return "Mrzn. déšť";
+            if (c <= 77) return "Sněžení";
+            if (c <= 82) return "Přeháňky";
+            if (c <= 86) return "Sněh. přeh.";
+            return "Bouřka";
+        }
 
         public static WeatherParameterInfo GetParameterInfo(WeatherParameter param)
         {

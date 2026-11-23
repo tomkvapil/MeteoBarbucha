@@ -178,15 +178,8 @@ namespace MeteoSrazky
 
                 foreach (var model in selectedModels)
                 {
-                    string key = varPrefix + "_" + model.Id;
-                    if (!section.ContainsKey(key) && selectedModels.Count == 1 && section.ContainsKey(varPrefix))
-                        key = varPrefix;
-
-                    double? val = null;
-                    if (section.ContainsKey(key))
-                        val = AggregateNumericArray(section[key] as object[], paramInfo.Aggregation);
-
-                    result.RegionModelSums[region.Code][model.Id] = val;
+                    result.RegionModelSums[region.Code][model.Id] = ExtractModelValue(
+                        section, model.Id, selectedModels.Count == 1, paramInfo, varPrefix);
                 }
             }
 
@@ -251,6 +244,68 @@ namespace MeteoSrazky
                 }
             }
             return table;
+        }
+
+        private static double? ExtractModelValue(
+            Dictionary<string, object> section,
+            string modelId,
+            bool isSingleModel,
+            WeatherParameterInfo paramInfo,
+            string varPrefix)
+        {
+            if (paramInfo.Parameter == WeatherParameter.UtciMax)
+                return ComputeMaxUtciForModel(section, modelId, isSingleModel);
+
+            string key = varPrefix + "_" + modelId;
+            if (!section.ContainsKey(key) && isSingleModel && section.ContainsKey(varPrefix))
+                key = varPrefix;
+
+            return section.ContainsKey(key)
+                ? AggregateNumericArray(section[key] as object[], paramInfo.Aggregation)
+                : null;
+        }
+
+        private static double? ComputeMaxUtciForModel(Dictionary<string, object> section, string modelId, bool isSingleModel)
+        {
+            object[] taArr = GetVarArray(section, "temperature_2m", modelId, isSingleModel);
+            object[] rhArr = GetVarArray(section, "relative_humidity_2m", modelId, isSingleModel);
+            object[] wsArr = GetVarArray(section, "wind_speed_10m", modelId, isSingleModel);
+            object[] swArr = GetVarArray(section, "shortwave_radiation", modelId, isSingleModel);
+
+            if (taArr == null || rhArr == null || wsArr == null)
+                return null;
+
+            int len = Math.Min(taArr.Length, Math.Min(rhArr.Length, wsArr.Length));
+            if (swArr != null)
+                len = Math.Min(len, swArr.Length);
+
+            double maxUtci = double.MinValue;
+            bool found = false;
+
+            for (int i = 0; i < len; i++)
+            {
+                if (taArr[i] == null || rhArr[i] == null || wsArr[i] == null)
+                    continue;
+
+                double ta = Convert.ToDouble(taArr[i], CultureInfo.InvariantCulture);
+                double rh = Convert.ToDouble(rhArr[i], CultureInfo.InvariantCulture);
+                double ws = Convert.ToDouble(wsArr[i], CultureInfo.InvariantCulture);
+                double sw = (swArr != null && swArr[i] != null) ? Convert.ToDouble(swArr[i], CultureInfo.InvariantCulture) : 0.0;
+
+                double utci = UtciCalculator.Compute(ta, rh, ws, sw);
+                if (utci > maxUtci) maxUtci = utci;
+                found = true;
+            }
+
+            return found ? (double?)Math.Round(maxUtci, 2) : null;
+        }
+
+        private static object[] GetVarArray(Dictionary<string, object> section, string baseVar, string modelId, bool isSingleModel)
+        {
+            string key = baseVar + "_" + modelId;
+            if (!section.ContainsKey(key) && isSingleModel && section.ContainsKey(baseVar))
+                key = baseVar;
+            return section.ContainsKey(key) ? section[key] as object[] : null;
         }
 
         private static double? AggregateNumericArray(object[] values, TimeAggregation agg)
@@ -385,15 +440,8 @@ namespace MeteoSrazky
 
                 foreach (var model in selectedModels)
                 {
-                    string key = varPrefix + "_" + model.Id;
-                    if (!section.ContainsKey(key) && selectedModels.Count == 1 && section.ContainsKey(varPrefix))
-                        key = varPrefix;
-
-                    double? val = null;
-                    if (section.ContainsKey(key))
-                        val = AggregateNumericArray(section[key] as object[], paramInfo.Aggregation);
-
-                    gridPts[i].ModelValues[model.Id] = val;
+                    gridPts[i].ModelValues[model.Id] = ExtractModelValue(
+                        section, model.Id, selectedModels.Count == 1, paramInfo, varPrefix);
                 }
             }
 

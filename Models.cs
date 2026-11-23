@@ -33,7 +33,9 @@ namespace MeteoSrazky
         Temperature850hPa,
         CloudCover,
         WindGusts10m,
-        WindSpeed10m
+        WindSpeed10m,
+        UtciMax,
+        SignificantWeather
     }
 
     public enum TimeAggregation
@@ -89,6 +91,7 @@ namespace MeteoSrazky
         public int ForecastDays { get; set; }
         public WeatherParameter Parameter { get; set; }
         public string Unit { get; set; }
+        public double? UtciWarningThreshold { get; set; }
         public string PeriodDescription { get; set; }
         public List<string> Dates { get; set; }
         public List<WeatherModelInfo> Models { get; set; }

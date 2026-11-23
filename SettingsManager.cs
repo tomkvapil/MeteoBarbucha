@@ -16,12 +16,15 @@ namespace MeteoSrazky
         public int AutoHoursIndex { get; set; }
         public string MeteologixApiKey { get; set; }
         public string UpdateManifestUrl { get; set; }
+        public double UtciWarningThreshold { get; set; }
 
         public AppSettings()
         {
             SelectedModelIds = new List<string>();
             ForecastDaysIndex = 2; // 3 dny
             AutoHoursIndex = 1; // 3 h
+            UtciWarningThreshold = 32.0;
+            UpdateManifestUrl = UpdateService.DefaultManifestUrl;
         }
     }
 

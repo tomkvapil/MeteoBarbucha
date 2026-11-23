@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
-  "downloadUrl": "https://github.com/VAS_UCET/MeteoBarbucha/releases/latest/download/MeteoBarbucha.exe",
-  "notes": "První veřejná verze aplikace MeteoBarbucha ČR."
+  "version": "1.2.0",
+  "downloadUrl": "https://github.com/tomkvapil/MeteoBarbucha/releases/latest/download/MeteoBarbucha.exe",
+  "notes": "Verze 1.2.0: Výchozí GitHub auto-aktualizace a nový parametr Significant Weather (WMO)."
 }

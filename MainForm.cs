@@ -19,6 +19,7 @@ namespace MeteoSrazky
         private Bitmap _currentPreviewBitmap;
 
         private ComboBox _cmbParam;
+        private NumericUpDown _numUtciWarn;
         private ComboBox _cmbAggMode;
         private RadioButton _rbDays;
         private RadioButton _rbHours;
@@ -40,7 +41,7 @@ namespace MeteoSrazky
         private Button _btnFeedback;
         private Button _btnHelp;
         private Button _btnUpdate;
-        private string _updateManifestUrl = "";
+        private string _updateManifestUrl = UpdateService.DefaultManifestUrl;
         private DataGridView _grid;
         private ComboBox _cmbMapSelect;
         private Label _lblSelectMap;
@@ -238,6 +239,27 @@ namespace MeteoSrazky
             {
                 if (!_suppressAutoFetch && _btnRun.Enabled && GetSelectedModels().Count > 0)
                     await RunFetchAndProcessAsync(true);
+            };
+            y += 30;
+
+            var lblUtciWarn = new Label { Text = "Výstraha UTCI ≥ (°C):", Location = new Point(16, y + 3), AutoSize = true };
+            _numUtciWarn = new NumericUpDown
+            {
+                Location = new Point(160, y),
+                Width = 72,
+                Minimum = -20,
+                Maximum = 50,
+                DecimalPlaces = 1,
+                Value = 32.0m
+            };
+            _numUtciWarn.ValueChanged += (s, e) =>
+            {
+                if (!_suppressAutoFetch && _lastResult != null && _lastResult.Parameter == WeatherParameter.UtciMax)
+                {
+                    _lastResult.UtciWarningThreshold = (double)_numUtciWarn.Value;
+                    PopulateGrid(_lastResult);
+                    BuildSummaryMaps(_lastResult);
+                }
             };
             y += 30;
 
@@ -449,7 +471,7 @@ namespace MeteoSrazky
 
             sidebar.Controls.AddRange(new Control[]
             {
-                lblParam, _cmbParam,
+                lblParam, _cmbParam, lblUtciWarn, _numUtciWarn,
                 lblAgg, _cmbAggMode,
                 lblHorizont, _rbDays, _cmbDays, _rbHours, lblOd, _dtpStart, lblDo, _dtpEnd, _lblHourRange,
                 lblModels, lnkAll, lnkNone, _chkModels,
@@ -676,10 +698,22 @@ namespace MeteoSrazky
 
             // StatusStrip
             var statusStrip = new StatusStrip();
-            _lblStatus = new ToolStripStatusLabel("Připraveno. Klikněte na 'Stáhnout data, spočítat a uložit'.");
-            _progress = new ToolStripProgressBar { Width = 180, Style = ProgressBarStyle.Marquee, Visible = false };
+            _lblStatus = new ToolStripStatusLabel("Připraveno. Klikněte na 'Stáhnout data a spočítat'.")
+            {
+                Spring = true,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            _progress = new ToolStripProgressBar { Width = 160, Style = ProgressBarStyle.Marquee, Visible = false };
+            var lblVersion = new ToolStripStatusLabel("Verze " + UpdateService.CurrentVersion + "  |  Vydáno: " + UpdateService.ReleaseDate)
+            {
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(51, 65, 85),
+                BorderSides = ToolStripStatusLabelBorderSides.Left,
+                Padding = new Padding(10, 0, 6, 0)
+            };
             statusStrip.Items.Add(_lblStatus);
             statusStrip.Items.Add(_progress);
+            statusStrip.Items.Add(lblVersion);
 
             Controls.Add(mainPanel);
             Controls.Add(sidebar);
@@ -858,6 +892,7 @@ namespace MeteoSrazky
                     _resultCache[cacheKey] = _lastResult;
                 }
 
+                _lastResult.UtciWarningThreshold = (double)_numUtciWarn.Value;
                 PopulateGrid(_lastResult);
                 BuildSummaryMaps(_lastResult);
 
@@ -933,6 +968,8 @@ namespace MeteoSrazky
                     _cmbDays.SelectedIndex = s.ForecastDaysIndex;
                 if (s.AutoHoursIndex >= 0 && s.AutoHoursIndex < _cmbAutoHours.Items.Count)
                     _cmbAutoHours.SelectedIndex = s.AutoHoursIndex;
+                if (s.UtciWarningThreshold >= -20 && s.UtciWarningThreshold <= 50)
+                    _numUtciWarn.Value = (decimal)s.UtciWarningThreshold;
 
                 if (s.SelectedModelIds != null && s.SelectedModelIds.Count > 0)
                 {
@@ -961,7 +998,8 @@ namespace MeteoSrazky
                 ParamIndex = _cmbParam.SelectedIndex,
                 AggModeIndex = _cmbAggMode.SelectedIndex,
                 ForecastDaysIndex = _cmbDays.SelectedIndex,
-                AutoHoursIndex = _cmbAutoHours.SelectedIndex
+                AutoHoursIndex = _cmbAutoHours.SelectedIndex,
+                UtciWarningThreshold = (double)_numUtciWarn.Value
             };
             foreach (var m in GetSelectedModels())
                 s.SelectedModelIds.Add(m.Id);
@@ -1274,10 +1312,19 @@ namespace MeteoSrazky
 
             string modelKey = _modelMapKeys.ContainsKey(modelName) ? _modelMapKeys[modelName] : null;
             double? val = LookupPointValue(nearest, modelKey);
-            string valText = val.HasValue ? val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + _lastResult.Unit : "N/A";
+            string valText = !val.HasValue
+                ? "N/A"
+                : (_lastResult.Parameter == WeatherParameter.SignificantWeather
+                    ? CzechData.GetWmoShortLabel(val.Value) + " (" + ((int)Math.Round(val.Value)) + ")"
+                    : val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + _lastResult.Unit);
+            bool isUtciWarn = _lastResult.Parameter == WeatherParameter.UtciMax &&
+                              _lastResult.UtciWarningThreshold.HasValue &&
+                              val.HasValue &&
+                              val.Value >= _lastResult.UtciWarningThreshold.Value;
+            string overlayText = (isUtciWarn ? "⚠ " : "") + valText + " (" + regionCode + ")" + (isUtciWarn ? " — VÝSTRAHA!" : "");
             if (targetBox != null)
-                targetBox.SetHoverOverlay(valText + " (" + regionCode + ")", targetBox.PointToClient(Cursor.Position));
-            _lblStatus.Text = string.Format(CultureInfo.InvariantCulture, "Kurzor: {0:0.00}° N, {1:0.00}° E ({2})  |  {3}: {4}", lat, lon, regionCode, modelName, valText);
+                targetBox.SetHoverOverlay(overlayText, targetBox.PointToClient(Cursor.Position));
+            _lblStatus.Text = string.Format(CultureInfo.InvariantCulture, "Kurzor: {0:0.00}° N, {1:0.00}° E ({2})  |  {3}: {4}{5}", lat, lon, regionCode, modelName, valText, isUtciWarn ? "  [⚠ VÝSTRAHA UTCI]" : "");
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -1445,7 +1492,9 @@ namespace MeteoSrazky
                     regionalTable[r.Code].TryGetValue(m.Id, out val);
                     if (val.HasValue)
                     {
-                        row.Cells[m.Id].Value = val.Value.ToString("0.0", CultureInfo.InvariantCulture);
+                        row.Cells[m.Id].Value = result.Parameter == WeatherParameter.SignificantWeather
+                            ? ((int)Math.Round(val.Value)) + " — " + CzechData.GetWmoShortLabel(val.Value)
+                            : val.Value.ToString("0.0", CultureInfo.InvariantCulture);
                         row.Cells[m.Id].Style.BackColor = MapRenderer.GetValueColor(val.Value, result.Parameter);
                         rowSum += val.Value;
                         rowCnt++;
