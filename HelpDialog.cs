@@ -9,8 +9,8 @@ namespace MeteoSrazky
         public HelpDialog()
         {
             Text = "Návod k použití — MeteoBarbucha ČR";
-            Size = new Size(780, 640);
-            MinimumSize = new Size(620, 480);
+            Size = new Size(800, 660);
+            MinimumSize = new Size(640, 480);
             StartPosition = FormStartPosition.CenterParent;
             Font = new Font("Segoe UI", 9.5f);
             BackColor = Color.White;
@@ -59,46 +59,40 @@ namespace MeteoSrazky
 
         private static void PopulateContent(RichTextBox rtb)
         {
-            AppendHeading(rtb, "MeteoBarbucha ČR — Návod k použití", 15f);
-            AppendText(rtb, "Aplikace stahuje předpovědi srážek a sněžení pro všech 14 krajů České republiky napříč numerickými meteorologickými modely, počítá součty za zvolené období a generuje přehledné mapy i CSV tabulky.\n\n");
+            AppendHeading(rtb, "MeteoBarbucha ČR (v" + UpdateService.CurrentVersion + ") — Návod k použití", 15f);
+            AppendText(rtb, "Aplikace stahuje předpovědi pro všech 14 krajů ČR i prostorovou síť 220 bodů napříč numerickými modely, počítá statistiky, vykresluje plynulé mapy, meteogramy i vertikální termodiagramy.\n\n");
 
             AppendHeading(rtb, "1. Rychlý postup (krok za krokem)", 11.5f);
             AppendText(rtb,
-                "1) V levém panelu vyberte Parametr předpovědi (Celkové srážky v mm nebo Sníh / Sněžení v cm).\n" +
-                "2) Zvolte způsob výpočtu za kraj (Průměr v kraji, Maximum v kraji nebo Krajské město).\n" +
-                "3) Vyberte období — buď Po dnech (1–7 dní), nebo Vlastní úsek v hodinách (přesné Od – Do).\n" +
-                "4) Zaškrtněte požadované meteorologické modely.\n" +
-                "5) Klikněte na tlačítko „Stáhnout data a spočítat“.\n" +
-                "6) Prohlédněte si výsledky v záložce Tabulka srážek nebo Snímky srážek (Mapy ČR).\n" +
-                "7) Pro uložení na disk klikněte na „Uložit snímky a tabulku“.\n\n");
+                "1) V levém panelu vyberte Parametr předpovědi (Srážky, Sníh, Teplota 2m Max/Min, T850, Oblačnost, Vítr/Nárazy, UTCI nebo Significant Weather).\n" +
+                "   • Při přepnutí parametru se data načtou automaticky (s 500ms prodlevou a využitím 12h mezipaměti).\n" +
+                "2) Volitelně zapněte Výstraha ≥ a nastavte prahovou hodnotu (červené šrafování + symbol ⚠ na mapě).\n" +
+                "3) Zvolte výpočet za kraj (Průměr v kraji, Maximum v kraji nebo Krajské město).\n" +
+                "4) Vyberte období — buď Po dnech (1–7 dní), nebo Vlastní úsek v hodinách (Od – Do).\n" +
+                "5) Zaškrtněte modely a klikněte na „Stáhnout data a spočítat“.\n" +
+                "6) Pro uložení všech PNG map a CSV tabulky klikněte na „Uložit snímky a tabulku“.\n\n");
 
-            AppendHeading(rtb, "2. Výpočet za kraj (220bodová prostorová síť)", 11.5f);
+            AppendHeading(rtb, "2. Časová osa, Meteogram a Předpovědní termodiagram", 11.5f);
             AppendText(rtb,
-                "Aplikace kromě 14 krajských měst stahuje také prostorovou síť 220 bodů pokrývajících celou ČR:\n" +
-                "• Průměr v kraji — aritmetický průměr všech bodů sítě ležících v daném kraji.\n" +
-                "• Maximum v kraji — nejvyšší hodnota ze všech bodů sítě v daném kraji (vhodné pro hlídání horských maxim a přívalových srážek).\n" +
-                "• Krajské město — bodová hodnota přímo pro souřadnice krajského města.\n" +
-                "Přepnutí režimu ihned přepočítá tabulku bez nutnosti znovu stahovat data.\n\n");
+                "• Časová osa nad záložkami: Umožňuje krokovat po jednotlivých dnech nebo hodinách předpovědi současně pro tabulku i mapy (krajní poloha vlevo = souhrn za celé období).\n" +
+                "• Spaghetti meteogram: Kliknutím na libovolné místo v detailu mapy nebo v záložce Výběr oblast se otevře graf vývoje daného prvku v čase pro všechny modely.\n" +
+                "• Předpovědní termodiagram (Skew-T / Log-P): Při zvoleném parametru Significant Weather otevře kliknutí na mapu jednotlivého modelu vertikální sondáž atmosféry (teplota T, rosný bod Td a vítr v hladinách 1000–200 hPa) s vlastním posuvníkem času. Na souhrnných mapách (Průměr, Max, Rozptyl) se neotvírá.\n\n");
 
-            AppendHeading(rtb, "3. Dostupné meteorologické modely", 11.5f);
+            AppendHeading(rtb, "3. Mapy ČR (Multi-view, Detail a Výběr oblast)", 11.5f);
             AppendText(rtb,
-                "• Otevřené modely (Open-Meteo API, zdarma bez klíče): ALADIN CZ (1 km, ČHMÚ), ECMWF IFS 0.25°, ICON-EU, ICON-D2 (2.2 km), ICON-D2 RUC (DWD), GFS Global, GEM Global, JMA Seamless, UKMO Seamless, ARPEGE Europe.\n" +
-                "• Volitelné Meteologix / Kachelmannwetter API: Po zadání vlastního X-API-Key klíče se automaticky dotážou i modely Meteologix ECMWF, Europe Swiss 4x4 a Europe Swiss Nowcast HD.\n\n");
+                "• Mapy mají reálné hranice ČR, 14 krajů, světle šedé hranice ORP, pozice krajských měst a v hlavičce zobrazují přesný čas běhu modelu.\n" +
+                "• Mapy jsou vyhlazené jemnou 4-bodovou IDW interpolací z 220bodové sítě.\n" +
+                "• Záložka Výběr oblast: Synchronizuje přiblížení a posun napříč všemi modely najednou (předvolby oblastí, Lupa +/-, klávesy +, −, 0, šipky). Najetím myši se ukáže plovoucí štítek s přesnou hodnotou pod kurzorem.\n\n");
 
-            AppendHeading(rtb, "4. Práce s mapou (Zoom, posun a souhrnné mapy)", 11.5f);
+            AppendHeading(rtb, "4. Dostupné modely a 12h mezipaměť", 11.5f);
             AppendText(rtb,
-                "• Mapa vykresluje reálné hranice ČR, hranice 14 krajů, světle šedé hranice ORP a pozice krajských měst.\n" +
-                "• V rozbalovacím seznamu nad mapou najdete kromě jednotlivých modelů také 3 souhrnné mapy: Průměr všech modelů, Maximum ze všech modelů a Rozptyl modelů (Max − Min).\n" +
-                "• Ovládání mapy: kolečko myši = přiblížení/oddálení (zoom), tažení levou myší = posun mapy, dvojklik nebo tlačítko „Resetovat zoom“ = návrat na celé zobrazení.\n\n");
+                "• 10 otevřených modelů (Open-Meteo API): ALADIN CZ (1 km, ČHMÚ), ECMWF IFS 0.25°, ICON-EU, ICON-D2, ICON-D2 RUC, GFS, GEM, JMA, UKMO, ARPEGE.\n" +
+                "• Volitelné Meteologix API (X-API-Key): Meteologix ECMWF, Europe Swiss 4x4, Europe Swiss Nowcast HD.\n" +
+                "• Všechny body se stahují v 1 společném požadavku a ukládají na 12 hodin do komprimované diskové cache (%AppData%\\MeteoBarbucha\\cache), aby se šetřily API limity (ochrana proti chybě 429).\n\n");
 
-            AppendHeading(rtb, "5. Ukládání výstupů a automatický režim", 11.5f);
+            AppendHeading(rtb, "5. Automatické aktualizace a přenositelnost", 11.5f);
             AppendText(rtb,
-                "• Tlačítko „Uložit snímky a tabulku“ uloží PNG mapy všech modelů do podsložky snimky\\ a souhrnnou CSV tabulku (UTF-8 s BOM, oddělovač středník pro český Excel) do podsložky tabulky\\.\n" +
-                "• Zaškrtnutím „Auto-stahovat a ukládat každých X h“ bude aplikace pravidelně na pozadí stahovat nová data a automaticky je archivovat.\n\n");
-
-            AppendHeading(rtb, "6. Přenositelnost a podpora", 11.5f);
-            AppendText(rtb,
-                "Aplikace je plně přenositelná (single-file .exe pro Windows 10/11 s .NET Framework 4.x). Nápady a připomínky můžete poslat přes tlačítko „Máte návrh na změnu aplikace?“ v horní liště.");
+                "• Aplikace je přenositelná (jediný soubor MeteoBarbucha.exe). Při každém spuštění automaticky kontroluje aktualizace z GitHub Releases a přes tlačítko Aktualizace je lze spravovat i ručně.");
         }
 
         private static void AppendHeading(RichTextBox rtb, string text, float size)

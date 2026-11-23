@@ -631,7 +631,7 @@ namespace MeteoSrazky
                 Visible = false
             };
             _picMap.ImageMouseMoved += OnMapMouseMoved;
-            _picMap.ImageClicked += pt => OpenMeteogramAtPixel(pt);
+            _picMap.ImageClicked += pt => OpenMeteogramAtPixel(pt, _cmbMapSelect.SelectedItem != null ? _cmbMapSelect.SelectedItem.ToString() : null);
             _btnResetZoom.Click += (s, e) => _picMap.ResetView();
 
             _multiViewPanel = new FlowLayoutPanel
@@ -1117,10 +1117,26 @@ namespace MeteoSrazky
             return WeatherService.GetGridPointValue(nearest, modelKey, step);
         }
 
-        private void OpenMeteogramAtPixel(PointF imgPt)
+        private void OpenMeteogramAtPixel(PointF imgPt, string modelName)
         {
             if (_lastResult == null || _lastResult.GridPoints == null || _lastResult.GridPoints.Count == 0)
                 return;
+
+            string modelKey = (!string.IsNullOrEmpty(modelName) && _modelMapKeys.ContainsKey(modelName))
+                ? _modelMapKeys[modelName]
+                : null;
+
+            // For Significant Weather: only open Forecast Thermodiagram on individual models (skip summary maps)
+            if (_lastResult.Parameter == WeatherParameter.SignificantWeather)
+            {
+                if (string.IsNullOrEmpty(modelKey) ||
+                    modelKey == "prumer_modelu" ||
+                    modelKey == "max_modelu" ||
+                    modelKey == "rozptyl_modelu")
+                {
+                    return;
+                }
+            }
 
             double lat, lon;
             if (!MapRenderer.TryImagePixelToLatLon(imgPt, out lat, out lon))
@@ -1139,8 +1155,16 @@ namespace MeteoSrazky
             }
             if (nearest == null) return;
 
-            using (var dlg = new MeteogramDialog(_lastResult, nearest, regionCode))
-                dlg.ShowDialog(this);
+            if (_lastResult.Parameter == WeatherParameter.SignificantWeather)
+            {
+                using (var dlg = new ThermodiagramDialog(_lastResult, nearest, regionCode, modelName, modelKey))
+                    dlg.ShowDialog(this);
+            }
+            else
+            {
+                using (var dlg = new MeteogramDialog(_lastResult, nearest, regionCode))
+                    dlg.ShowDialog(this);
+            }
         }
 
         private void ApplySavedSettings()
@@ -1441,7 +1465,7 @@ namespace MeteoSrazky
                 areaPic.SetView(_areaZoom, _areaPan, false);
                 areaPic.ViewChanged += (z, p) => SyncAreaView(areaPic, z, p);
                 areaPic.ImageMouseMoved += pt => OnAreaMapMouseMoved(areaPic, modelName, pt);
-                areaPic.ImageClicked += pt => OpenMeteogramAtPixel(pt);
+                areaPic.ImageClicked += pt => OpenMeteogramAtPixel(pt, modelName);
 
                 _areaCards.Add(areaPic);
                 areaCard.Controls.Add(areaPic);
