@@ -2,6 +2,15 @@
 
 All notable changes to **MeteoBarbucha ČR** will be documented in this file.
 
+## [1.3.1] - 2026-11-23
+### Added
+- **Emagram mode toggle** (`Emagram (rovné izotermy)`) in `ThermodiagramDialog.cs` to switch between Skew-T and straight-isotherm Emagram vertical profiles.
+- Prominent **red crossed-circle indicator** (`⊘`) on model maps when a model does not provide data for the selected parameter (e.g., `ALADIN CZ 1 km` for 850 hPa temperature).
+### Fixed
+- Ensured models without data for a given parameter are strictly excluded from multi-model summary calculations (Average, Maximum, Spread).
+### Changed
+- Updated the built-in **User Guide (`HelpDialog.cs`)** for v1.3.1.
+
 ## [1.3.0] - 2026-11-23
 ### Added
 - **Forecast Thermodiagram (Skew-T / Log-P)** (`ThermodiagramDialog.cs`) for the **Significant Weather** parameter:

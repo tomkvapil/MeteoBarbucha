@@ -76,7 +76,8 @@ namespace MeteoSrazky
             AppendText(rtb,
                 "• Časová osa nad záložkami: Umožňuje krokovat po jednotlivých dnech nebo hodinách předpovědi současně pro tabulku i mapy (krajní poloha vlevo = souhrn za celé období).\n" +
                 "• Spaghetti meteogram: Kliknutím na libovolné místo v detailu mapy nebo v záložce Výběr oblast se otevře graf vývoje daného prvku v čase pro všechny modely.\n" +
-                "• Předpovědní termodiagram (Skew-T / Log-P): Při zvoleném parametru Significant Weather otevře kliknutí na mapu jednotlivého modelu vertikální sondáž atmosféry (teplota T, rosný bod Td a vítr v hladinách 1000–200 hPa) s vlastním posuvníkem času. Na souhrnných mapách (Průměr, Max, Rozptyl) se neotvírá.\n\n");
+                "• Předpovědní termodiagram (Skew-T / Emagram): Při zvoleném parametru Significant Weather otevře kliknutí na mapu jednotlivého modelu vertikální sondáž atmosféry (teplota T, rosný bod Td a vítr v hladinách 1000–200 hPa) s vlastním posuvníkem času a přepínačem mezi Skew-T a Emagramem. Na souhrnných mapách (Průměr, Max, Rozptyl) se neotvírá.\n" +
+                "• Chybějící data modelu: Pokud některý model daný parametr neposkytuje (např. ALADIN CZ pro 850 hPa), zobrazí se na jeho mapě červený přeškrtnutý kruh a do souhrnných map (Průměr, Max, Rozptyl) není zahrnut.\n\n");
 
             AppendHeading(rtb, "3. Mapy ČR (Multi-view, Detail a Výběr oblast)", 11.5f);
             AppendText(rtb,

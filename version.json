@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "downloadUrl": "https://github.com/tomkvapil/MeteoBarbucha/releases/latest/download/MeteoBarbucha.exe",
-  "notes": "Verze 1.3.0: Předpovědní termodiagram (Skew-T) pro Significant Weather u jednotlivých modelů a aktualizovaný návod k použití."
+  "notes": "Verze 1.3.1: Červený přeškrtnutý kruh u modelů bez dat (např. ALADIN T850), vyloučení z průměrů a přepínač Emagram v termodiagramu."
 }

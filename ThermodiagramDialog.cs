@@ -31,6 +31,7 @@ namespace MeteoSrazky
         private readonly Panel _canvas;
         private readonly TrackBar _trkTime;
         private readonly Label _lblTime;
+        private readonly CheckBox _chkEmagram;
         private string _statusText = "Stahuji vertikální profil (termodiagram)...";
 
         public ThermodiagramDialog(ForecastResult result, GeoGridPoint point, string regionCode, string modelName, string modelKey)
@@ -54,8 +55,17 @@ namespace MeteoSrazky
 
             var topBar = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = Color.FromArgb(241, 245, 249), Padding = new Padding(12, 6, 12, 6) };
             var lblTitle = new Label { Text = "Čas sondáže:", Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(12, 13), AutoSize = true };
-            _trkTime = new TrackBar { Location = new Point(108, 6), Width = 440, Minimum = 0, Maximum = 0, TickStyle = TickStyle.None, Enabled = false };
-            _lblTime = new Label { Text = "Načítám...", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(37, 99, 235), Location = new Point(560, 13), AutoSize = true };
+            _trkTime = new TrackBar { Location = new Point(108, 6), Width = 360, Minimum = 0, Maximum = 0, TickStyle = TickStyle.None, Enabled = false };
+            _lblTime = new Label { Text = "Načítám...", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(37, 99, 235), Location = new Point(476, 13), AutoSize = true };
+            _chkEmagram = new CheckBox
+            {
+                Text = "Emagram (rovné izotermy)",
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Location = new Point(660, 12),
+                AutoSize = true,
+                Cursor = Cursors.Hand
+            };
+            _chkEmagram.CheckedChanged += (s, e) => _canvas.Invalidate();
 
             _trkTime.ValueChanged += (s, e) =>
             {
@@ -64,7 +74,7 @@ namespace MeteoSrazky
                 _canvas.Invalidate();
             };
 
-            topBar.Controls.AddRange(new Control[] { lblTitle, _trkTime, _lblTime });
+            topBar.Controls.AddRange(new Control[] { lblTitle, _trkTime, _lblTime, _chkEmagram });
 
             _canvas = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
             _canvas.Paint += OnCanvasPaint;
@@ -171,10 +181,12 @@ namespace MeteoSrazky
             using (var darkBrush = new SolidBrush(Color.FromArgb(15, 23, 42)))
             using (var mutedBrush = new SolidBrush(Color.FromArgb(100, 116, 139)))
             {
+                bool isEmagram = _chkEmagram.Checked;
+                string diagType = isEmagram ? "Emagram" : "Skew-T / Log-P";
                 string header = string.Format(
                     CultureInfo.InvariantCulture,
-                    "Předpovědní termodiagram (Skew-T / Log-P) — {0}  |  {1:0.00}° N, {2:0.00}° E ({3})",
-                    _modelName, _lat, _lon, _regionCode);
+                    "Předpovědní termodiagram ({4}) — {0}  |  {1:0.00}° N, {2:0.00}° E ({3})",
+                    _modelName, _lat, _lon, _regionCode, diagType);
                 g.DrawString(header, titleFont, darkBrush, 20, 10);
 
                 if (!string.IsNullOrEmpty(_statusText) || _times.Count == 0)
@@ -188,7 +200,9 @@ namespace MeteoSrazky
 
                 double logPMax = Math.Log10(1000.0);
                 double logPMin = Math.Log10(200.0);
-                float SkewFactor = 0.55f * plot.Width / plot.Height;
+                float SkewFactor = isEmagram ? 0.0f : (0.55f * plot.Width / plot.Height);
+                double minTempAxis = isEmagram ? -70.0 : -50.0;
+                double maxTempAxis = 35.0;
 
                 Func<double, float> pToY = p =>
                 {
@@ -198,7 +212,7 @@ namespace MeteoSrazky
 
                 Func<double, float, float> tToX = (tempC, py) =>
                 {
-                    double baseFrac = (tempC - (-50.0)) / (35.0 - (-50.0));
+                    double baseFrac = (tempC - minTempAxis) / (maxTempAxis - minTempAxis);
                     float skewOffset = (plot.Bottom - py) * SkewFactor;
                     return plot.Left + (float)(baseFrac * plot.Width) + skewOffset;
                 };
@@ -283,7 +297,7 @@ namespace MeteoSrazky
                 }
 
                 // Bottom temperature labels
-                for (int t = -40; t <= 30; t += 10)
+                for (int t = -70; t <= 30; t += 10)
                 {
                     float xBot = tToX(t, plot.Bottom);
                     if (xBot >= plot.Left && xBot <= plot.Right)

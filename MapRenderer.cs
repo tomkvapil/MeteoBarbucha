@@ -545,6 +545,30 @@ namespace MeteoSrazky
                         countAll > 0 ? (double?)(sumAll / countAll) : null,
                         countAll > 0 ? (double?)minVal : null,
                         countAll > 0 ? (double?)maxVal : null);
+
+                    // Draw prominent red crossed circle if this model has no data for the selected parameter
+                    if (validGridCount == 0 && validPts.Count == 0)
+                    {
+                        float cx = mapRect.Left + mapRect.Width / 2f;
+                        float cy = mapRect.Top + mapRect.Height / 2f;
+                        float r = 95f;
+                        using (var bgBrush = new SolidBrush(Color.FromArgb(200, 255, 255, 255)))
+                        using (var redPen = new Pen(Color.FromArgb(220, 38, 38), 10f))
+                        using (var noDataFont = new Font("Segoe UI", 12f, FontStyle.Bold))
+                        using (var redBrush = new SolidBrush(Color.FromArgb(185, 28, 28)))
+                        {
+                            g.FillEllipse(bgBrush, cx - r, cy - r, r * 2f, r * 2f);
+                            g.DrawEllipse(redPen, cx - r, cy - r, r * 2f, r * 2f);
+                            float d = (float)(r * 0.7071);
+                            g.DrawLine(redPen, cx - d, cy - d, cx + d, cy + d);
+
+                            string msg = "Model neobsahuje data pro tento parametr";
+                            SizeF msz = g.MeasureString(msg, noDataFont);
+                            RectangleF msgRect = new RectangleF(cx - msz.Width / 2f - 10f, cy + r + 12f, msz.Width + 20f, msz.Height + 6f);
+                            g.FillRectangle(bgBrush, msgRect);
+                            g.DrawString(msg, noDataFont, redBrush, msgRect.X + 10f, msgRect.Y + 3f);
+                        }
+                    }
                 }
             }
 
