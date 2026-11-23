@@ -47,6 +47,128 @@ namespace MeteoSrazky
         private const int MapWidth = 1200;
         private const int MapHeight = 760;
 
+        private static readonly object _cacheLock = new object();
+        private static int _cachedGridCount = -1;
+        private static byte[] _cachedMask;
+        private static int[] _cachedIdx;     // 4 indices per pixel
+        private static float[] _cachedWeights; // 4 weights per pixel
+        private static int _cacheStartX, _cacheEndX, _cacheStartY, _cacheEndY;
+
+        private static void EnsureGridCache(List<GeoGridPoint> gridPoints, Rectangle projRect, GraphicsPath krajePath)
+        {
+            lock (_cacheLock)
+            {
+                if (_cachedGridCount == gridPoints.Count && _cachedMask != null)
+                    return;
+
+                int w = MapWidth;
+                int h = MapHeight;
+                int nPix = w * h;
+                byte[] mask = new byte[nPix];
+                int[] indices = new int[nPix * 4];
+                float[] weights = new float[nPix * 4];
+
+                RectangleF bounds = krajePath.GetBounds();
+                _cacheStartX = Math.Max(0, (int)Math.Floor(bounds.Left));
+                _cacheEndX = Math.Min(w - 1, (int)Math.Ceiling(bounds.Right));
+                _cacheStartY = Math.Max(0, (int)Math.Floor(bounds.Top));
+                _cacheEndY = Math.Min(h - 1, (int)Math.Ceiling(bounds.Bottom));
+
+                PointF[] gridScreen = new PointF[gridPoints.Count];
+                for (int i = 0; i < gridPoints.Count; i++)
+                    gridScreen[i] = Project(gridPoints[i].Latitude, gridPoints[i].Longitude, projRect);
+
+                using (var maskBmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+                using (var mg = Graphics.FromImage(maskBmp))
+                {
+                    mg.Clear(Color.Black);
+                    mg.FillPath(Brushes.White, krajePath);
+                    mg.Flush();
+
+                    BitmapData maskData = maskBmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                    byte[] rawMask = new byte[Math.Abs(maskData.Stride) * h];
+                    Marshal.Copy(maskData.Scan0, rawMask, 0, rawMask.Length);
+                    int stride = maskData.Stride;
+
+                    for (int y = _cacheStartY; y <= _cacheEndY; y++)
+                    {
+                        int rowOff = y * stride;
+                        int pixRow = y * w;
+                        for (int x = _cacheStartX; x <= _cacheEndX; x++)
+                        {
+                            if (rawMask[rowOff + x * 4] <= 128) continue;
+                            int pIdx = pixRow + x;
+                            mask[pIdx] = 1;
+
+                            // Find 4 nearest grid points for smooth local IDW interpolation
+                            double d0 = double.MaxValue, d1 = double.MaxValue, d2 = double.MaxValue, d3 = double.MaxValue;
+                            int i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+                            double px = x + 0.5, py = y + 0.5;
+
+                            for (int g = 0; g < gridScreen.Length; g++)
+                            {
+                                double dx = px - gridScreen[g].X;
+                                double dy = py - gridScreen[g].Y;
+                                double dist2 = dx * dx + dy * dy;
+                                if (dist2 < d0)
+                                {
+                                    d3 = d2; i3 = i2;
+                                    d2 = d1; i2 = i1;
+                                    d1 = d0; i1 = i0;
+                                    d0 = dist2; i0 = g;
+                                }
+                                else if (dist2 < d1)
+                                {
+                                    d3 = d2; i3 = i2;
+                                    d2 = d1; i2 = i1;
+                                    d1 = dist2; i1 = g;
+                                }
+                                else if (dist2 < d2)
+                                {
+                                    d3 = d2; i3 = i2;
+                                    d2 = dist2; i2 = g;
+                                }
+                                else if (dist2 < d3)
+                                {
+                                    d3 = dist2; i3 = g;
+                                }
+                            }
+
+                            int base4 = pIdx * 4;
+                            indices[base4] = i0;
+                            indices[base4 + 1] = i1;
+                            indices[base4 + 2] = i2;
+                            indices[base4 + 3] = i3;
+
+                            if (d0 < 0.5)
+                            {
+                                weights[base4] = 1f;
+                            }
+                            else
+                            {
+                                double w0 = 1.0 / d0;
+                                double w1 = 1.0 / d1;
+                                double w2 = 1.0 / d2;
+                                double w3 = 1.0 / d3;
+                                double wSum = w0 + w1 + w2 + w3;
+                                weights[base4] = (float)(w0 / wSum);
+                                weights[base4 + 1] = (float)(w1 / wSum);
+                                weights[base4 + 2] = (float)(w2 / wSum);
+                                weights[base4 + 3] = (float)(w3 / wSum);
+                            }
+                        }
+                    }
+
+                    maskBmp.UnlockBits(maskData);
+                }
+
+                _cachedMask = mask;
+                _cachedIdx = indices;
+                _cachedWeights = weights;
+                _cachedGridCount = gridPoints.Count;
+            }
+        }
+
         public static bool TryImagePixelToLatLon(PointF imgPt, out double lat, out double lon)
         {
             Rectangle mapRect = new Rectangle(30, 96, MapWidth - 60, MapHeight - 185);
@@ -93,11 +215,19 @@ namespace MeteoSrazky
                 using (var mutedBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
                 {
                     g.DrawString(paramTitle + " — " + modelDisplayName, titleFont, whiteBrush, 24, 14);
-                    string dateSpan = !string.IsNullOrEmpty(result.PeriodDescription)
-                        ? result.PeriodDescription
-                        : (result.Dates.Count > 0
-                            ? result.Dates[0] + " až " + result.Dates[result.Dates.Count - 1] + " (" + result.ForecastDays + " dny)"
-                            : result.ForecastDays + " dní");
+                    string dateSpan;
+                    if (result.SelectedTimeStepIndex >= 0 && result.TimeSteps != null && result.SelectedTimeStepIndex < result.TimeSteps.Count)
+                    {
+                        dateSpan = "Krok: " + result.TimeSteps[result.SelectedTimeStepIndex].Replace("T", " ");
+                    }
+                    else
+                    {
+                        dateSpan = !string.IsNullOrEmpty(result.PeriodDescription)
+                            ? result.PeriodDescription
+                            : (result.Dates.Count > 0
+                                ? result.Dates[0] + " až " + result.Dates[result.Dates.Count - 1] + " (" + result.ForecastDays + " dny)"
+                                : result.ForecastDays + " dní");
+                    }
                     string subtitle = "Období: " + dateSpan + "   |   Vygenerováno: " + result.FetchedAt.ToString("dd.MM.yyyy HH:mm");
                     g.DrawString(subtitle, subFont, mutedBrush, 26, 48);
                 }
@@ -138,23 +268,25 @@ namespace MeteoSrazky
                         }
                     }
 
-                    // Collect spatial grid points (real model grid) if available, otherwise fall back to region centroids
-                    var spatialPts = new List<Tuple<PointF, double>>();
-                    if (!string.IsNullOrEmpty(modelKey) && result.GridPoints != null && result.GridPoints.Count > 0)
+                    // Collect spatial grid values (ordered 1:1 with result.GridPoints for fast cache lookup)
+                    bool canUseGridCache = !string.IsNullOrEmpty(modelKey) && result.GridPoints != null && result.GridPoints.Count > 20;
+                    double?[] gridVals = canUseGridCache ? new double?[result.GridPoints.Count] : null;
+                    int validGridCount = 0;
+
+                    if (canUseGridCache)
                     {
-                        foreach (var gp in result.GridPoints)
+                        for (int gi = 0; gi < result.GridPoints.Count; gi++)
                         {
+                            var gp = result.GridPoints[gi];
                             double? gVal = null;
                             if (modelKey == "prumer_modelu" || modelKey == "max_modelu" || modelKey == "rozptyl_modelu")
                             {
-                                double gSum = 0;
-                                double gMin = double.MaxValue;
-                                double gMax = double.MinValue;
+                                double gSum = 0, gMin = double.MaxValue, gMax = double.MinValue;
                                 int gCnt = 0;
                                 foreach (var m in result.Models)
                                 {
-                                    double? mv;
-                                    if (gp.ModelValues.TryGetValue(m.Id, out mv) && mv.HasValue)
+                                    double? mv = WeatherService.GetGridPointValue(gp, m.Id, result.SelectedTimeStepIndex);
+                                    if (mv.HasValue)
                                     {
                                         gSum += mv.Value;
                                         if (mv.Value < gMin) gMin = mv.Value;
@@ -171,19 +303,76 @@ namespace MeteoSrazky
                             }
                             else
                             {
-                                gp.ModelValues.TryGetValue(modelKey, out gVal);
+                                gVal = WeatherService.GetGridPointValue(gp, modelKey, result.SelectedTimeStepIndex);
                             }
 
-                            if (gVal.HasValue)
-                                spatialPts.Add(Tuple.Create(Project(gp.Latitude, gp.Longitude, projRect), gVal.Value));
+                            gridVals[gi] = gVal;
+                            if (gVal.HasValue) validGridCount++;
                         }
                     }
 
-                    bool hasDenseGrid = spatialPts.Count > 20;
-                    var renderPts = hasDenseGrid ? spatialPts : validPts;
+                    // 1. Clipped 1x1 px field via Precomputed 4-Neighbor IDW Cache + LockBits
+                    if (canUseGridCache && validGridCount > 0)
+                    {
+                        g.Flush();
+                        EnsureGridCache(result.GridPoints, projRect, krajePath);
+                        bool categorical = result.Parameter == WeatherParameter.SignificantWeather;
 
-                    // 1. Clipped 1x1 px field via LockBits (fast direct memory write)
-                    if (renderPts.Count > 0)
+                        BitmapData bmpData = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+                        int totalBytes = Math.Abs(bmpData.Stride) * height;
+                        byte[] pixels = new byte[totalBytes];
+                        Marshal.Copy(bmpData.Scan0, pixels, 0, totalBytes);
+                        int stride = bmpData.Stride;
+
+                        for (int y = _cacheStartY; y <= _cacheEndY; y++)
+                        {
+                            int rowOff = y * stride;
+                            int pixRow = y * width;
+                            for (int x = _cacheStartX; x <= _cacheEndX; x++)
+                            {
+                                int pIdx = pixRow + x;
+                                if (_cachedMask[pIdx] == 0) continue;
+
+                                int base4 = pIdx * 4;
+                                double val;
+                                if (categorical)
+                                {
+                                    double? v0 = gridVals[_cachedIdx[base4]];
+                                    val = v0 ?? 0.0;
+                                }
+                                else
+                                {
+                                    double sum = 0;
+                                    double wSum = 0;
+                                    for (int k = 0; k < 4; k++)
+                                    {
+                                        double? vk = gridVals[_cachedIdx[base4 + k]];
+                                        if (vk.HasValue)
+                                        {
+                                            float wk = _cachedWeights[base4 + k];
+                                            sum += vk.Value * wk;
+                                            wSum += wk;
+                                        }
+                                    }
+                                    val = wSum > 0 ? (sum / wSum) : 0.0;
+                                }
+
+                                Color c = GetValueColor(val, result.Parameter);
+                                if (result.WarningThreshold.HasValue && val >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
+                                    c = Color.FromArgb(220, 38, 38);
+
+                                int idx = rowOff + x * 4;
+                                pixels[idx] = c.B;
+                                pixels[idx + 1] = c.G;
+                                pixels[idx + 2] = c.R;
+                                pixels[idx + 3] = 255;
+                            }
+                        }
+
+                        Marshal.Copy(pixels, 0, bmpData.Scan0, totalBytes);
+                        bmp.UnlockBits(bmpData);
+                    }
+                    else if (validPts.Count > 0)
                     {
                         g.Flush();
                         RectangleF bounds = krajePath.GetBounds();
@@ -218,19 +407,10 @@ namespace MeteoSrazky
                                     int idx = rowOff + x * 4;
                                     if (maskPixels[idx] > 128)
                                     {
-                                        double val = hasDenseGrid
-                                            ? NearestGridValue(x + 0.5, y + 0.5, renderPts)
-                                            : InterpolateIdw(x + 0.5, y + 0.5, renderPts);
+                                        double val = InterpolateIdw(x + 0.5, y + 0.5, validPts);
                                         Color c = GetValueColor(val, result.Parameter);
-
-                                        // UTCI warning hatch overlay for areas >= threshold
-                                        if (result.Parameter == WeatherParameter.UtciMax &&
-                                            result.UtciWarningThreshold.HasValue &&
-                                            val >= result.UtciWarningThreshold.Value &&
-                                            ((x + y) % 7 < 2))
-                                        {
+                                        if (result.WarningThreshold.HasValue && val >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
                                             c = Color.FromArgb(220, 38, 38);
-                                        }
 
                                         pixels[idx] = c.B;
                                         pixels[idx + 1] = c.G;
@@ -292,10 +472,9 @@ namespace MeteoSrazky
 
                             double? val;
                             valuesByRegion.TryGetValue(r.Code, out val);
-                            bool isWarn = result.Parameter == WeatherParameter.UtciMax &&
-                                          result.UtciWarningThreshold.HasValue &&
+                            bool isWarn = result.WarningThreshold.HasValue &&
                                           val.HasValue &&
-                                          val.Value >= result.UtciWarningThreshold.Value;
+                                          val.Value >= result.WarningThreshold.Value;
 
                             string valStr = !val.HasValue
                                 ? "N/A"

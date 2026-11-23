@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -38,7 +39,8 @@ namespace MeteoSrazky
             DateTime? endHour,
             WeatherParameter parameter,
             string meteologixApiKey,
-            Action<string> log)
+            Action<string> log,
+            CancellationToken ct = default(CancellationToken))
         {
             if (selectedModels == null || selectedModels.Count == 0)
                 throw new ArgumentException("Vyberte alespoň jeden meteorologický model.");
@@ -139,10 +141,9 @@ namespace MeteoSrazky
                 log("Stahuji denní data — " + paramInfo.DisplayName + " (" + forecastDays + " dny) pro 14 krajů a " + selectedModels.Count + " modelů...");
             }
 
-            string json = await _httpClient.GetStringAsync(url);
-
             var serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = int.MaxValue;
+            string json = await GetStringWithCancelAsync(url, ct);
             object parsed = serializer.DeserializeObject(json);
 
             object[] regionItems = parsed as object[];
@@ -172,7 +173,11 @@ namespace MeteoSrazky
                     if (timeArr != null)
                     {
                         foreach (var t in timeArr)
-                            result.Dates.Add(Convert.ToString(t, CultureInfo.InvariantCulture));
+                        {
+                            string ts = Convert.ToString(t, CultureInfo.InvariantCulture);
+                            result.Dates.Add(ts);
+                            result.TimeSteps.Add(ts);
+                        }
                     }
                 }
 
@@ -195,7 +200,7 @@ namespace MeteoSrazky
             log("Open-Meteo data pro kraje úspěšně stažena.");
 
             // Fetch dense spatial grid across Czechia (~220 points) for accurate maps
-            await FetchSpatialGridAsync(selectedModels, forecastDays, useHourly, paramInfo, cleanStart, cleanEnd, sectionKey, varPrefix, result, log);
+            await FetchSpatialGridAsync(selectedModels, forecastDays, useHourly, paramInfo, cleanStart, cleanEnd, sectionKey, varPrefix, result, log, ct);
 
             // Optional Meteologix / Kachelmannwetter API check if key is provided
             if (!string.IsNullOrWhiteSpace(meteologixApiKey))
@@ -206,9 +211,23 @@ namespace MeteoSrazky
             return result;
         }
 
+        public static double? GetGridPointValue(GeoGridPoint gp, string modelId, int timeStepIndex)
+        {
+            if (gp == null || string.IsNullOrEmpty(modelId)) return null;
+            if (timeStepIndex >= 0)
+            {
+                double?[] series;
+                if (gp.ModelSeries != null && gp.ModelSeries.TryGetValue(modelId, out series) && series != null && timeStepIndex < series.Length)
+                    return series[timeStepIndex];
+                return null;
+            }
+            double? v;
+            return gp.ModelValues.TryGetValue(modelId, out v) ? v : null;
+        }
+
         public static Dictionary<string, Dictionary<string, double?>> ComputeRegionalTable(ForecastResult result, RegionAggregationMode mode)
         {
-            if (mode == RegionAggregationMode.PointValue || result.GridPoints == null || result.GridPoints.Count == 0)
+            if ((mode == RegionAggregationMode.PointValue && result.SelectedTimeStepIndex < 0) || result.GridPoints == null || result.GridPoints.Count == 0)
                 return result.RegionModelSums;
 
             var table = new Dictionary<string, Dictionary<string, double?>>();
@@ -224,8 +243,8 @@ namespace MeteoSrazky
                     foreach (var gp in result.GridPoints)
                     {
                         if (gp.RegionCode != r.Code) continue;
-                        double? v;
-                        if (gp.ModelValues.TryGetValue(m.Id, out v) && v.HasValue)
+                        double? v = GetGridPointValue(gp, m.Id, result.SelectedTimeStepIndex);
+                        if (v.HasValue)
                         {
                             sum += v.Value;
                             if (v.Value > max) max = v.Value;
@@ -235,11 +254,15 @@ namespace MeteoSrazky
 
                     if (cnt > 0)
                         table[r.Code][m.Id] = Math.Round(mode == RegionAggregationMode.RegionMax ? max : (sum / cnt), 2);
-                    else
+                    else if (result.SelectedTimeStepIndex < 0)
                     {
                         double? fallback;
                         result.RegionModelSums[r.Code].TryGetValue(m.Id, out fallback);
                         table[r.Code][m.Id] = fallback;
+                    }
+                    else
+                    {
+                        table[r.Code][m.Id] = null;
                     }
                 }
             }
@@ -342,6 +365,56 @@ namespace MeteoSrazky
             return Math.Round(res, 2);
         }
 
+        private static double?[] ExtractModelSeries(
+            Dictionary<string, object> section,
+            string modelId,
+            bool isSingleModel,
+            WeatherParameterInfo paramInfo,
+            string varPrefix)
+        {
+            if (paramInfo.Parameter == WeatherParameter.UtciMax)
+            {
+                object[] taArr = GetVarArray(section, "temperature_2m", modelId, isSingleModel);
+                object[] rhArr = GetVarArray(section, "relative_humidity_2m", modelId, isSingleModel);
+                object[] wsArr = GetVarArray(section, "wind_speed_10m", modelId, isSingleModel);
+                object[] swArr = GetVarArray(section, "shortwave_radiation", modelId, isSingleModel);
+                if (taArr == null || rhArr == null || wsArr == null) return null;
+
+                int len = Math.Min(taArr.Length, Math.Min(rhArr.Length, wsArr.Length));
+                if (swArr != null) len = Math.Min(len, swArr.Length);
+                var arr = new double?[len];
+                for (int i = 0; i < len; i++)
+                {
+                    if (taArr[i] == null || rhArr[i] == null || wsArr[i] == null) continue;
+                    double ta = Convert.ToDouble(taArr[i], CultureInfo.InvariantCulture);
+                    double rh = Convert.ToDouble(rhArr[i], CultureInfo.InvariantCulture);
+                    double ws = Convert.ToDouble(wsArr[i], CultureInfo.InvariantCulture);
+                    double sw = (swArr != null && swArr[i] != null) ? Convert.ToDouble(swArr[i], CultureInfo.InvariantCulture) : 0.0;
+                    arr[i] = Math.Round(UtciCalculator.Compute(ta, rh, ws, sw), 2);
+                }
+                return arr;
+            }
+
+            object[] raw = GetVarArray(section, varPrefix, modelId, isSingleModel);
+            if (raw == null) return null;
+            var outArr = new double?[raw.Length];
+            for (int i = 0; i < raw.Length; i++)
+            {
+                if (raw[i] != null)
+                    outArr[i] = Math.Round(Convert.ToDouble(raw[i], CultureInfo.InvariantCulture), 2);
+            }
+            return outArr;
+        }
+
+        private static async Task<string> GetStringWithCancelAsync(string url, CancellationToken ct)
+        {
+            using (var resp = await _httpClient.GetAsync(url, ct))
+            {
+                resp.EnsureSuccessStatusCode();
+                return await resp.Content.ReadAsStringAsync();
+            }
+        }
+
         private async Task FetchSpatialGridAsync(
             List<WeatherModelInfo> selectedModels,
             int forecastDays,
@@ -352,7 +425,8 @@ namespace MeteoSrazky
             string sectionKey,
             string varPrefix,
             ForecastResult result,
-            Action<string> log)
+            Action<string> log,
+            CancellationToken ct)
         {
             var gridLats = new List<string>();
             var gridLons = new List<string>();
@@ -421,7 +495,7 @@ namespace MeteoSrazky
             }
 
             log("Stahuji prostorovou síť (" + gridPts.Count + " bodů) pro přesné mapové snímky...");
-            string json = await _httpClient.GetStringAsync(url);
+            string json = await GetStringWithCancelAsync(url, ct);
 
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
             object parsed = serializer.DeserializeObject(json);
@@ -440,8 +514,9 @@ namespace MeteoSrazky
 
                 foreach (var model in selectedModels)
                 {
-                    gridPts[i].ModelValues[model.Id] = ExtractModelValue(
-                        section, model.Id, selectedModels.Count == 1, paramInfo, varPrefix);
+                    bool single = selectedModels.Count == 1;
+                    gridPts[i].ModelValues[model.Id] = ExtractModelValue(section, model.Id, single, paramInfo, varPrefix);
+                    gridPts[i].ModelSeries[model.Id] = ExtractModelSeries(section, model.Id, single, paramInfo, varPrefix);
                 }
             }
 

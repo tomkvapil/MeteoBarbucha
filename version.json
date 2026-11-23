@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.2",
   "downloadUrl": "https://github.com/tomkvapil/MeteoBarbucha/releases/latest/download/MeteoBarbucha.exe",
-  "notes": "Verze 1.2.0: Výchozí GitHub auto-aktualizace a nový parametr Significant Weather (WMO)."
+  "notes": "Verze 1.2.2: Sloučené 1-requestové stahování, 12h komprimovaná cache, retry při 429, debounce a zobrazení času běhu modelu na mapě."
 }

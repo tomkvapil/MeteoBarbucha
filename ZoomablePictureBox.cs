@@ -12,10 +12,12 @@ namespace MeteoSrazky
         private PointF _panNorm = PointF.Empty; // Normalized offset relative to drawn image size
         private bool _dragging;
         private Point _lastMouse;
+        private Point _mouseDownPos;
         private string _hoverOverlayText;
         private Point _hoverMousePos;
 
         public event Action<PointF?> ImageMouseMoved;
+        public event Action<PointF> ImageClicked;
         public event Action<float, PointF> ViewChanged;
 
         public float Zoom { get { return _zoom; } }
@@ -74,6 +76,7 @@ namespace MeteoSrazky
             {
                 _dragging = true;
                 _lastMouse = e.Location;
+                _mouseDownPos = e.Location;
                 Focus();
             }
         }
@@ -141,7 +144,15 @@ namespace MeteoSrazky
         {
             base.OnMouseUp(e);
             if (e.Button == MouseButtons.Left)
+            {
                 _dragging = false;
+                if (Math.Abs(e.X - _mouseDownPos.X) <= 4 && Math.Abs(e.Y - _mouseDownPos.Y) <= 4)
+                {
+                    PointF? pt = ScreenToImage(e.Location);
+                    if (pt.HasValue && ImageClicked != null)
+                        ImageClicked(pt.Value);
+                }
+            }
         }
 
         protected override void OnDoubleClick(EventArgs e)

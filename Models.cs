@@ -78,10 +78,12 @@ namespace MeteoSrazky
         public double Longitude { get; set; }
         public string RegionCode { get; set; }
         public Dictionary<string, double?> ModelValues { get; set; }
+        public Dictionary<string, double?[]> ModelSeries { get; set; }
 
         public GeoGridPoint()
         {
             ModelValues = new Dictionary<string, double?>();
+            ModelSeries = new Dictionary<string, double?[]>();
         }
     }
 
@@ -91,21 +93,27 @@ namespace MeteoSrazky
         public int ForecastDays { get; set; }
         public WeatherParameter Parameter { get; set; }
         public string Unit { get; set; }
-        public double? UtciWarningThreshold { get; set; }
+        public double? WarningThreshold { get; set; }
         public string PeriodDescription { get; set; }
         public List<string> Dates { get; set; }
+        public List<string> TimeSteps { get; set; }
+        public int SelectedTimeStepIndex { get; set; }
         public List<WeatherModelInfo> Models { get; set; }
-        // Key: Region.Code -> (Key: Model.Id -> Sum in mm/cm, or null if unavailable)
+        // Key: Region.Code -> (Key: Model.Id -> Sum/Agg in unit, or null if unavailable)
         public Dictionary<string, Dictionary<string, double?>> RegionModelSums { get; set; }
         public List<GeoGridPoint> GridPoints { get; set; }
+        public Dictionary<string, string> ModelRunTimes { get; set; }
 
         public ForecastResult()
         {
             Unit = "mm";
+            SelectedTimeStepIndex = -1;
             Dates = new List<string>();
+            TimeSteps = new List<string>();
             Models = new List<WeatherModelInfo>();
             RegionModelSums = new Dictionary<string, Dictionary<string, double?>>();
             GridPoints = new List<GeoGridPoint>();
+            ModelRunTimes = new Dictionary<string, string>();
         }
     }
 }

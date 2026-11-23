@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace MeteoSrazky
@@ -15,11 +17,16 @@ namespace MeteoSrazky
         private readonly Dictionary<string, Dictionary<string, double?>> _modelMapsData = new Dictionary<string, Dictionary<string, double?>>();
         private readonly Dictionary<string, string> _modelMapKeys = new Dictionary<string, string>();
         private readonly Dictionary<string, ForecastResult> _resultCache = new Dictionary<string, ForecastResult>();
+        private readonly List<string> _cacheOrder = new List<string>();
+        private CancellationTokenSource _fetchCts;
         private bool _suppressAutoFetch;
         private Bitmap _currentPreviewBitmap;
 
         private ComboBox _cmbParam;
-        private NumericUpDown _numUtciWarn;
+        private CheckBox _chkWarn;
+        private NumericUpDown _numWarn;
+        private TrackBar _trkTimeStep;
+        private Label _lblTimeStep;
         private ComboBox _cmbAggMode;
         private RadioButton _rbDays;
         private RadioButton _rbHours;
@@ -237,30 +244,35 @@ namespace MeteoSrazky
             _cmbParam.SelectedIndex = 0;
             _cmbParam.SelectedIndexChanged += async (s, e) =>
             {
-                if (!_suppressAutoFetch && _btnRun.Enabled && GetSelectedModels().Count > 0)
+                UpdateDefaultWarningForParam();
+                if (!_suppressAutoFetch && GetSelectedModels().Count > 0)
                     await RunFetchAndProcessAsync(true);
             };
             y += 30;
 
-            var lblUtciWarn = new Label { Text = "Výstraha UTCI ≥ (°C):", Location = new Point(16, y + 3), AutoSize = true };
-            _numUtciWarn = new NumericUpDown
+            _chkWarn = new CheckBox
             {
-                Location = new Point(160, y),
+                Text = "Výstraha ≥",
+                Location = new Point(16, y + 3),
+                AutoSize = true,
+                Checked = false
+            };
+            _numWarn = new NumericUpDown
+            {
+                Location = new Point(118, y),
                 Width = 72,
-                Minimum = -20,
-                Maximum = 50,
+                Minimum = -40,
+                Maximum = 200,
                 DecimalPlaces = 1,
-                Value = 32.0m
+                Value = 30.0m,
+                Enabled = false
             };
-            _numUtciWarn.ValueChanged += (s, e) =>
+            _chkWarn.CheckedChanged += (s, e) =>
             {
-                if (!_suppressAutoFetch && _lastResult != null && _lastResult.Parameter == WeatherParameter.UtciMax)
-                {
-                    _lastResult.UtciWarningThreshold = (double)_numUtciWarn.Value;
-                    PopulateGrid(_lastResult);
-                    BuildSummaryMaps(_lastResult);
-                }
+                _numWarn.Enabled = _chkWarn.Checked;
+                RefreshWarningOverlay();
             };
+            _numWarn.ValueChanged += (s, e) => RefreshWarningOverlay();
             y += 30;
 
             var lblAgg = new Label { Text = "Výpočet za kraj (tabulka):", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
@@ -471,7 +483,7 @@ namespace MeteoSrazky
 
             sidebar.Controls.AddRange(new Control[]
             {
-                lblParam, _cmbParam, lblUtciWarn, _numUtciWarn,
+                lblParam, _cmbParam, _chkWarn, _numWarn,
                 lblAgg, _cmbAggMode,
                 lblHorizont, _rbDays, _cmbDays, _rbHours, lblOd, _dtpStart, lblDo, _dtpEnd, _lblHourRange,
                 lblModels, lnkAll, lnkNone, _chkModels,
@@ -486,6 +498,44 @@ namespace MeteoSrazky
                 Dock = DockStyle.Fill,
                 Padding = new Padding(14)
             };
+
+            // Timeline bar above TabControl
+            var timelineBar = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 38,
+                BackColor = Color.White,
+                Padding = new Padding(10, 4, 10, 4)
+            };
+            var lblTimeTitle = new Label
+            {
+                Text = "Časová osa:",
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Location = new Point(10, 10),
+                AutoSize = true
+            };
+            _trkTimeStep = new TrackBar
+            {
+                Location = new Point(95, 3),
+                Width = 420,
+                Minimum = -1,
+                Maximum = -1,
+                Value = -1,
+                TickStyle = TickStyle.None,
+                Enabled = false
+            };
+            _lblTimeStep = new Label
+            {
+                Text = "Celé období (souhrn)",
+                ForeColor = Color.FromArgb(37, 99, 235),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Location = new Point(525, 10),
+                AutoSize = true
+            };
+            _trkTimeStep.ValueChanged += (s, e) => OnTimeStepChanged();
+            timelineBar.Controls.Add(lblTimeTitle);
+            timelineBar.Controls.Add(_trkTimeStep);
+            timelineBar.Controls.Add(_lblTimeStep);
 
             var tabs = new TabControl
             {
@@ -571,6 +621,7 @@ namespace MeteoSrazky
                 Visible = false
             };
             _picMap.ImageMouseMoved += OnMapMouseMoved;
+            _picMap.ImageClicked += pt => OpenMeteogramAtPixel(pt);
             _btnResetZoom.Click += (s, e) => _picMap.ResetView();
 
             _multiViewPanel = new FlowLayoutPanel
@@ -695,6 +746,7 @@ namespace MeteoSrazky
             tabs.TabPages.Add(_tabArea);
             tabs.TabPages.Add(tabLog);
             mainPanel.Controls.Add(tabs);
+            mainPanel.Controls.Add(timelineBar);
 
             // StatusStrip
             var statusStrip = new StatusStrip();
@@ -857,6 +909,94 @@ namespace MeteoSrazky
             return param + "|" + period + "|" + string.Join(",", ids) + "|" + (apiKey ?? "").Trim();
         }
 
+        private void UpdateDefaultWarningForParam()
+        {
+            var p = GetSelectedParameter();
+            _suppressAutoFetch = true;
+            try
+            {
+                switch (p)
+                {
+                    case WeatherParameter.UtciMax:
+                        _chkWarn.Checked = true;
+                        _numWarn.Value = 32.0m;
+                        break;
+                    case WeatherParameter.WindGusts10m:
+                    case WeatherParameter.WindSpeed10m:
+                        _numWarn.Value = 70.0m;
+                        break;
+                    case WeatherParameter.TotalPrecipitation:
+                        _numWarn.Value = 30.0m;
+                        break;
+                    case WeatherParameter.Snowfall:
+                        _numWarn.Value = 15.0m;
+                        break;
+                    default:
+                        _numWarn.Value = 30.0m;
+                        break;
+                }
+                _numWarn.Enabled = _chkWarn.Checked;
+            }
+            finally
+            {
+                _suppressAutoFetch = false;
+            }
+        }
+
+        private void RefreshWarningOverlay()
+        {
+            if (_suppressAutoFetch || _lastResult == null) return;
+            _lastResult.WarningThreshold = _chkWarn.Checked ? (double?)_numWarn.Value : null;
+            PopulateGrid(_lastResult);
+            BuildSummaryMaps(_lastResult);
+        }
+
+        private void SetupTimelineForResult(ForecastResult result)
+        {
+            _suppressAutoFetch = true;
+            try
+            {
+                if (result != null && result.TimeSteps != null && result.TimeSteps.Count > 1)
+                {
+                    _trkTimeStep.Minimum = -1;
+                    _trkTimeStep.Maximum = result.TimeSteps.Count - 1;
+                    _trkTimeStep.Value = Math.Max(-1, Math.Min(result.TimeSteps.Count - 1, result.SelectedTimeStepIndex));
+                    _trkTimeStep.Enabled = true;
+                }
+                else
+                {
+                    _trkTimeStep.Minimum = -1;
+                    _trkTimeStep.Maximum = -1;
+                    _trkTimeStep.Value = -1;
+                    _trkTimeStep.Enabled = false;
+                }
+                UpdateTimeStepLabel();
+            }
+            finally
+            {
+                _suppressAutoFetch = false;
+            }
+        }
+
+        private void UpdateTimeStepLabel()
+        {
+            if (_lastResult == null || _trkTimeStep.Value < 0 || _lastResult.TimeSteps == null || _trkTimeStep.Value >= _lastResult.TimeSteps.Count)
+                _lblTimeStep.Text = "Celé období (souhrn)";
+            else
+                _lblTimeStep.Text = "Krok: " + _lastResult.TimeSteps[_trkTimeStep.Value].Replace("T", " ");
+        }
+
+        private void OnTimeStepChanged()
+        {
+            if (_suppressAutoFetch || _lastResult == null) return;
+            _lastResult.SelectedTimeStepIndex = _trkTimeStep.Value;
+            UpdateTimeStepLabel();
+            PopulateGrid(_lastResult);
+            BuildSummaryMaps(_lastResult);
+            if (_picMap.Visible)
+                DisplaySelectedMap();
+        }
+
         private async System.Threading.Tasks.Task RunFetchAndProcessAsync(bool useCache = false)
         {
             var models = GetSelectedModels();
@@ -866,7 +1006,14 @@ namespace MeteoSrazky
                 return;
             }
 
-            _btnRun.Enabled = false;
+            if (_fetchCts != null)
+            {
+                _fetchCts.Cancel();
+                _fetchCts.Dispose();
+            }
+            _fetchCts = new CancellationTokenSource();
+            var ct = _fetchCts.Token;
+
             _btnSaveAll.Enabled = false;
             _progress.Visible = true;
             _lblStatus.Text = "Stahuji data a počítám hodnoty...";
@@ -888,16 +1035,32 @@ namespace MeteoSrazky
                 }
                 else
                 {
-                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog);
+                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog, ct);
+                    if (ct.IsCancellationRequested) return;
+
                     _resultCache[cacheKey] = _lastResult;
+                    _cacheOrder.Remove(cacheKey);
+                    _cacheOrder.Add(cacheKey);
+                    while (_cacheOrder.Count > 6)
+                    {
+                        string oldest = _cacheOrder[0];
+                        _cacheOrder.RemoveAt(0);
+                        _resultCache.Remove(oldest);
+                    }
                 }
 
-                _lastResult.UtciWarningThreshold = (double)_numUtciWarn.Value;
+                _lastResult.WarningThreshold = _chkWarn.Checked ? (double?)_numWarn.Value : null;
+                _lastResult.SelectedTimeStepIndex = -1;
+                SetupTimelineForResult(_lastResult);
                 PopulateGrid(_lastResult);
                 BuildSummaryMaps(_lastResult);
 
                 _btnSaveAll.Enabled = true;
-                _lblStatus.Text = "Hotovo (" + _lastResult.PeriodDescription + "). Klikněte na 'Uložit snímky a tabulku' pro uložení na disk.";
+                _lblStatus.Text = "Hotovo (" + _lastResult.PeriodDescription + "). Kliknutím na mapu zobrazíte meteogram.";
+            }
+            catch (OperationCanceledException)
+            {
+                AppendLog("Předchozí stahování zrušeno novějším požadavkem.");
             }
             catch (Exception ex)
             {
@@ -921,14 +1084,15 @@ namespace MeteoSrazky
         private double? LookupPointValue(GeoGridPoint nearest, string modelKey)
         {
             if (nearest == null || _lastResult == null) return null;
+            int step = _lastResult.SelectedTimeStepIndex;
             if (modelKey == "prumer_modelu" || modelKey == "max_modelu" || modelKey == "rozptyl_modelu")
             {
                 double sum = 0, min = double.MaxValue, max = double.MinValue;
                 int cnt = 0;
                 foreach (var m in _lastResult.Models)
                 {
-                    double? mv;
-                    if (nearest.ModelValues.TryGetValue(m.Id, out mv) && mv.HasValue)
+                    double? mv = WeatherService.GetGridPointValue(nearest, m.Id, step);
+                    if (mv.HasValue)
                     {
                         sum += mv.Value;
                         if (mv.Value < min) min = mv.Value;
@@ -940,10 +1104,33 @@ namespace MeteoSrazky
                 return modelKey == "prumer_modelu" ? (sum / cnt) : (modelKey == "max_modelu" ? max : (max - min));
             }
 
-            double? val = null;
-            if (!string.IsNullOrEmpty(modelKey))
-                nearest.ModelValues.TryGetValue(modelKey, out val);
-            return val;
+            return WeatherService.GetGridPointValue(nearest, modelKey, step);
+        }
+
+        private void OpenMeteogramAtPixel(PointF imgPt)
+        {
+            if (_lastResult == null || _lastResult.GridPoints == null || _lastResult.GridPoints.Count == 0)
+                return;
+
+            double lat, lon;
+            if (!MapRenderer.TryImagePixelToLatLon(imgPt, out lat, out lon))
+                return;
+
+            string regionCode = CzechData.FindRegionCode(lat, lon);
+            if (string.IsNullOrEmpty(regionCode))
+                return;
+
+            GeoGridPoint nearest = null;
+            double bestD2 = double.MaxValue;
+            foreach (var gp in _lastResult.GridPoints)
+            {
+                double d2 = (gp.Latitude - lat) * (gp.Latitude - lat) + (gp.Longitude - lon) * (gp.Longitude - lon);
+                if (d2 < bestD2) { bestD2 = d2; nearest = gp; }
+            }
+            if (nearest == null) return;
+
+            using (var dlg = new MeteogramDialog(_lastResult, nearest, regionCode))
+                dlg.ShowDialog(this);
         }
 
         private void ApplySavedSettings()
@@ -968,8 +1155,8 @@ namespace MeteoSrazky
                     _cmbDays.SelectedIndex = s.ForecastDaysIndex;
                 if (s.AutoHoursIndex >= 0 && s.AutoHoursIndex < _cmbAutoHours.Items.Count)
                     _cmbAutoHours.SelectedIndex = s.AutoHoursIndex;
-                if (s.UtciWarningThreshold >= -20 && s.UtciWarningThreshold <= 50)
-                    _numUtciWarn.Value = (decimal)s.UtciWarningThreshold;
+                if (s.UtciWarningThreshold >= -40 && s.UtciWarningThreshold <= 200)
+                    _numWarn.Value = (decimal)s.UtciWarningThreshold;
 
                 if (s.SelectedModelIds != null && s.SelectedModelIds.Count > 0)
                 {
@@ -999,7 +1186,7 @@ namespace MeteoSrazky
                 AggModeIndex = _cmbAggMode.SelectedIndex,
                 ForecastDaysIndex = _cmbDays.SelectedIndex,
                 AutoHoursIndex = _cmbAutoHours.SelectedIndex,
-                UtciWarningThreshold = (double)_numUtciWarn.Value
+                UtciWarningThreshold = (double)_numWarn.Value
             };
             foreach (var m in GetSelectedModels())
                 s.SelectedModelIds.Add(m.Id);
@@ -1118,7 +1305,7 @@ namespace MeteoSrazky
             PopulateMultiView();
         }
 
-        private void PopulateMultiView()
+        private async void PopulateMultiView()
         {
             _multiViewPanel.SuspendLayout();
             _areaMultiViewPanel.SuspendLayout();
@@ -1136,15 +1323,42 @@ namespace MeteoSrazky
                 return;
             }
 
+            // Snapshot inputs for background rendering
+            var renderJobs = new List<Tuple<string, string, Dictionary<string, double?>>>();
             foreach (var item in _cmbMapSelect.Items)
             {
                 string modelName = item.ToString();
                 Dictionary<string, double?> values;
                 if (!_modelMapsData.TryGetValue(modelName, out values))
                     continue;
-
                 string modelKey = _modelMapKeys.ContainsKey(modelName) ? _modelMapKeys[modelName] : null;
-                Bitmap fullBmp = MapRenderer.RenderMapBitmap(modelKey, modelName, _lastResult, values);
+                renderJobs.Add(Tuple.Create(modelName, modelKey, values));
+            }
+            var resultRef = _lastResult;
+
+            var rendered = await Task.Run(() =>
+            {
+                var list = new List<Tuple<string, Bitmap>>();
+                foreach (var job in renderJobs)
+                {
+                    Bitmap bmp = MapRenderer.RenderMapBitmap(job.Item2, job.Item1, resultRef, job.Item3);
+                    list.Add(Tuple.Create(job.Item1, bmp));
+                }
+                return list;
+            });
+
+            if (_lastResult != resultRef)
+            {
+                foreach (var r in rendered) r.Item2.Dispose();
+                _multiViewPanel.ResumeLayout();
+                _areaMultiViewPanel.ResumeLayout();
+                return;
+            }
+
+            foreach (var entry in rendered)
+            {
+                string modelName = entry.Item1;
+                Bitmap fullBmp = entry.Item2;
                 _multiViewThumbnails.Add(fullBmp);
 
                 var card = new Panel
@@ -1217,6 +1431,7 @@ namespace MeteoSrazky
                 areaPic.SetView(_areaZoom, _areaPan, false);
                 areaPic.ViewChanged += (z, p) => SyncAreaView(areaPic, z, p);
                 areaPic.ImageMouseMoved += pt => OnAreaMapMouseMoved(areaPic, modelName, pt);
+                areaPic.ImageClicked += pt => OpenMeteogramAtPixel(pt);
 
                 _areaCards.Add(areaPic);
                 areaCard.Controls.Add(areaPic);
@@ -1226,7 +1441,8 @@ namespace MeteoSrazky
 
             _multiViewPanel.ResumeLayout();
             _areaMultiViewPanel.ResumeLayout();
-            SwitchToMultiView();
+            if (!_picMap.Visible)
+                SwitchToMultiView();
         }
 
         private void SyncAreaView(ZoomablePictureBox source, float zoom, PointF pan)
@@ -1317,14 +1533,13 @@ namespace MeteoSrazky
                 : (_lastResult.Parameter == WeatherParameter.SignificantWeather
                     ? CzechData.GetWmoShortLabel(val.Value) + " (" + ((int)Math.Round(val.Value)) + ")"
                     : val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + _lastResult.Unit);
-            bool isUtciWarn = _lastResult.Parameter == WeatherParameter.UtciMax &&
-                              _lastResult.UtciWarningThreshold.HasValue &&
-                              val.HasValue &&
-                              val.Value >= _lastResult.UtciWarningThreshold.Value;
-            string overlayText = (isUtciWarn ? "⚠ " : "") + valText + " (" + regionCode + ")" + (isUtciWarn ? " — VÝSTRAHA!" : "");
+            bool isWarn = _lastResult.WarningThreshold.HasValue &&
+                          val.HasValue &&
+                          val.Value >= _lastResult.WarningThreshold.Value;
+            string overlayText = (isWarn ? "⚠ " : "") + valText + " (" + regionCode + ")" + (isWarn ? " — VÝSTRAHA!" : "");
             if (targetBox != null)
                 targetBox.SetHoverOverlay(overlayText, targetBox.PointToClient(Cursor.Position));
-            _lblStatus.Text = string.Format(CultureInfo.InvariantCulture, "Kurzor: {0:0.00}° N, {1:0.00}° E ({2})  |  {3}: {4}{5}", lat, lon, regionCode, modelName, valText, isUtciWarn ? "  [⚠ VÝSTRAHA UTCI]" : "");
+            _lblStatus.Text = string.Format(CultureInfo.InvariantCulture, "Kurzor: {0:0.00}° N, {1:0.00}° E ({2})  |  {3}: {4}{5}", lat, lon, regionCode, modelName, valText, isWarn ? "  [⚠ VÝSTRAHA]" : "");
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
