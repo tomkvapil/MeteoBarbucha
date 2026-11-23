@@ -228,7 +228,26 @@ namespace MeteoSrazky
                                 ? result.Dates[0] + " až " + result.Dates[result.Dates.Count - 1] + " (" + result.ForecastDays + " dny)"
                                 : result.ForecastDays + " dní");
                     }
-                    string subtitle = "Období: " + dateSpan + "   |   Vygenerováno: " + result.FetchedAt.ToString("dd.MM.yyyy HH:mm");
+                    string runInfo = "";
+                    if (!string.IsNullOrEmpty(modelKey) && result.ModelRunTimes != null)
+                    {
+                        string rt;
+                        if (result.ModelRunTimes.TryGetValue(modelKey, out rt) && !string.IsNullOrEmpty(rt))
+                            runInfo = "   |   Běh modelu: " + rt;
+                        else if (modelKey == "prumer_modelu" || modelKey == "max_modelu" || modelKey == "rozptyl_modelu")
+                        {
+                            foreach (var m in result.Models)
+                            {
+                                if (result.ModelRunTimes.TryGetValue(m.Id, out rt) && !string.IsNullOrEmpty(rt))
+                                {
+                                    runInfo = "   |   Běh modelů: " + rt;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    string subtitle = "Období: " + dateSpan + runInfo + "   |   Vygenerováno: " + result.FetchedAt.ToString("dd.MM.yyyy HH:mm");
                     g.DrawString(subtitle, subFont, mutedBrush, 26, 48);
                 }
 
@@ -334,11 +353,30 @@ namespace MeteoSrazky
                                 if (_cachedMask[pIdx] == 0) continue;
 
                                 int base4 = pIdx * 4;
-                                double val;
+                                Color c;
+                                double warnVal;
+
                                 if (categorical)
                                 {
+                                    double rSum = 0, gSum = 0, bSum = 0, wSum = 0;
                                     double? v0 = gridVals[_cachedIdx[base4]];
-                                    val = v0 ?? 0.0;
+                                    warnVal = v0 ?? 0.0;
+                                    for (int k = 0; k < 4; k++)
+                                    {
+                                        double? vk = gridVals[_cachedIdx[base4 + k]];
+                                        if (vk.HasValue)
+                                        {
+                                            float wk = _cachedWeights[base4 + k];
+                                            Color ck = GetValueColor(vk.Value, result.Parameter);
+                                            rSum += ck.R * wk;
+                                            gSum += ck.G * wk;
+                                            bSum += ck.B * wk;
+                                            wSum += wk;
+                                        }
+                                    }
+                                    c = wSum > 0
+                                        ? Color.FromArgb((int)(rSum / wSum), (int)(gSum / wSum), (int)(bSum / wSum))
+                                        : Color.FromArgb(241, 245, 249);
                                 }
                                 else
                                 {
@@ -354,11 +392,11 @@ namespace MeteoSrazky
                                             wSum += wk;
                                         }
                                     }
-                                    val = wSum > 0 ? (sum / wSum) : 0.0;
+                                    warnVal = wSum > 0 ? (sum / wSum) : 0.0;
+                                    c = GetValueColor(warnVal, result.Parameter);
                                 }
 
-                                Color c = GetValueColor(val, result.Parameter);
-                                if (result.WarningThreshold.HasValue && val >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
+                                if (result.WarningThreshold.HasValue && warnVal >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
                                     c = Color.FromArgb(220, 38, 38);
 
                                 int idx = rowOff + x * 4;

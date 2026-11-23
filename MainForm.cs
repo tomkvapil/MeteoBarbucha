@@ -242,11 +242,21 @@ namespace MeteoSrazky
             foreach (var p in CzechData.AvailableParameters)
                 _cmbParam.Items.Add(p);
             _cmbParam.SelectedIndex = 0;
-            _cmbParam.SelectedIndexChanged += async (s, e) =>
+            var paramDebounceTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            paramDebounceTimer.Tick += async (s, e) =>
+            {
+                paramDebounceTimer.Stop();
+                if (GetSelectedModels().Count > 0)
+                    await RunFetchAndProcessAsync(true);
+            };
+            _cmbParam.SelectedIndexChanged += (s, e) =>
             {
                 UpdateDefaultWarningForParam();
-                if (!_suppressAutoFetch && GetSelectedModels().Count > 0)
-                    await RunFetchAndProcessAsync(true);
+                if (!_suppressAutoFetch)
+                {
+                    paramDebounceTimer.Stop();
+                    paramDebounceTimer.Start();
+                }
             };
             y += 30;
 

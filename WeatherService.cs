@@ -67,7 +67,7 @@ namespace MeteoSrazky
                 Models = new List<WeatherModelInfo>(selectedModels)
             };
 
-            // Build batch coordinates for all 14 regions
+            // Build single combined batch: 14 regional centroids + 220 spatial grid points (1 HTTP call!)
             var latList = new List<string>();
             var lonList = new List<string>();
             foreach (var r in CzechData.Regions)
@@ -77,6 +77,24 @@ namespace MeteoSrazky
                 result.RegionModelSums[r.Code] = new Dictionary<string, double?>();
             }
 
+            var gridPts = new List<GeoGridPoint>();
+            for (double lat = 48.55; lat <= 51.06; lat += 0.25)
+            {
+                for (double lon = 12.10; lon <= 18.85; lon += 0.35)
+                {
+                    double rLat = Math.Round(lat, 2);
+                    double rLon = Math.Round(lon, 2);
+                    latList.Add(rLat.ToString("0.00", CultureInfo.InvariantCulture));
+                    lonList.Add(rLon.ToString("0.00", CultureInfo.InvariantCulture));
+                    gridPts.Add(new GeoGridPoint
+                    {
+                        Latitude = rLat,
+                        Longitude = rLon,
+                        RegionCode = CzechData.FindRegionCode(rLat, rLon)
+                    });
+                }
+            }
+
             var modelIds = new List<string>();
             foreach (var m in selectedModels)
                 modelIds.Add(m.Id);
@@ -84,7 +102,6 @@ namespace MeteoSrazky
             string url;
             string sectionKey;
             string varPrefix;
-            bool queryHourly = useHourly || paramInfo.ForceHourly;
 
             if (useHourly)
             {
@@ -108,7 +125,6 @@ namespace MeteoSrazky
                     Uri.EscapeDataString(eParam)
                 );
                 sectionKey = "hourly";
-                log("Stahuji hodinová data — " + paramInfo.DisplayName + " (" + result.PeriodDescription + ") pro 14 krajů a " + selectedModels.Count + " modelů...");
             }
             else if (paramInfo.ForceHourly)
             {
@@ -123,7 +139,6 @@ namespace MeteoSrazky
                     forecastDays
                 );
                 sectionKey = "hourly";
-                log("Stahuji hodinová data — " + paramInfo.DisplayName + " (" + forecastDays + " dny) pro 14 krajů a " + selectedModels.Count + " modelů...");
             }
             else
             {
@@ -138,28 +153,35 @@ namespace MeteoSrazky
                     forecastDays
                 );
                 sectionKey = "daily";
-                log("Stahuji denní data — " + paramInfo.DisplayName + " (" + forecastDays + " dny) pro 14 krajů a " + selectedModels.Count + " modelů...");
+            }
+
+            string json = DiskCache.TryGet(url);
+            if (!string.IsNullOrEmpty(json))
+            {
+                log("Načteno z 12h diskové mezipaměti (0 síťových požadavků): " + paramInfo.DisplayName);
+            }
+            else
+            {
+                log("Stahuji data — " + paramInfo.DisplayName + " (" + latList.Count + " bodů × " + selectedModels.Count + " modelů v 1 požadavku)...");
+                json = await GetStringWithRetryAsync(url, ct, log);
+                DiskCache.Put(url, json);
             }
 
             var serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = int.MaxValue;
-            string json = await GetStringWithCancelAsync(url, ct);
             object parsed = serializer.DeserializeObject(json);
 
-            object[] regionItems = parsed as object[];
-            if (regionItems == null)
-                regionItems = new object[] { parsed };
+            object[] items = parsed as object[];
+            if (items == null)
+                items = new object[] { parsed };
 
-            if (regionItems.Length != CzechData.Regions.Count)
-            {
-                log("Upozornění: Počet vrácených lokalit (" + regionItems.Length + ") neodpovídá počtu krajů (" + CzechData.Regions.Count + ").");
-            }
+            int regionCount = CzechData.Regions.Count;
+            bool singleModel = selectedModels.Count == 1;
 
-            int count = Math.Min(regionItems.Length, CzechData.Regions.Count);
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < Math.Min(items.Length, regionCount); i++)
             {
                 var region = CzechData.Regions[i];
-                var itemDict = regionItems[i] as Dictionary<string, object>;
+                var itemDict = items[i] as Dictionary<string, object>;
                 if (itemDict == null || !itemDict.ContainsKey(sectionKey))
                     continue;
 
@@ -184,9 +206,27 @@ namespace MeteoSrazky
                 foreach (var model in selectedModels)
                 {
                     result.RegionModelSums[region.Code][model.Id] = ExtractModelValue(
-                        section, model.Id, selectedModels.Count == 1, paramInfo, varPrefix);
+                        section, model.Id, singleModel, paramInfo, varPrefix);
                 }
             }
+
+            for (int gi = 0; gi < gridPts.Count && (regionCount + gi) < items.Length; gi++)
+            {
+                var itemDict = items[regionCount + gi] as Dictionary<string, object>;
+                if (itemDict == null || !itemDict.ContainsKey(sectionKey))
+                    continue;
+
+                var section = itemDict[sectionKey] as Dictionary<string, object>;
+                if (section == null)
+                    continue;
+
+                foreach (var model in selectedModels)
+                {
+                    gridPts[gi].ModelValues[model.Id] = ExtractModelValue(section, model.Id, singleModel, paramInfo, varPrefix);
+                    gridPts[gi].ModelSeries[model.Id] = ExtractModelSeries(section, model.Id, singleModel, paramInfo, varPrefix);
+                }
+            }
+            result.GridPoints = gridPts;
 
             if (!useHourly && result.Dates.Count > 0)
             {
@@ -197,10 +237,10 @@ namespace MeteoSrazky
                 result.PeriodDescription = firstDate + " až " + lastDate + " (" + forecastDays + " dny)";
             }
 
-            log("Open-Meteo data pro kraje úspěšně stažena.");
+            // Fetch model run initialization times from static CDN metadata
+            await FetchModelRunTimesAsync(selectedModels, result, ct);
 
-            // Fetch dense spatial grid across Czechia (~220 points) for accurate maps
-            await FetchSpatialGridAsync(selectedModels, forecastDays, useHourly, paramInfo, cleanStart, cleanEnd, sectionKey, varPrefix, result, log, ct);
+            log("Open-Meteo data úspěšně zpracována (" + gridPts.Count + " bodů sítě).");
 
             // Optional Meteologix / Kachelmannwetter API check if key is provided
             if (!string.IsNullOrWhiteSpace(meteologixApiKey))
@@ -406,122 +446,74 @@ namespace MeteoSrazky
             return outArr;
         }
 
-        private static async Task<string> GetStringWithCancelAsync(string url, CancellationToken ct)
+        private static async Task<string> GetStringWithRetryAsync(string url, CancellationToken ct, Action<string> log)
         {
-            using (var resp = await _httpClient.GetAsync(url, ct))
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                resp.EnsureSuccessStatusCode();
-                return await resp.Content.ReadAsStringAsync();
+                using (var resp = await _httpClient.GetAsync(url, ct))
+                {
+                    if ((int)resp.StatusCode == 429)
+                    {
+                        if (attempt == 0)
+                        {
+                            int waitSec = 3;
+                            if (resp.Headers.RetryAfter != null && resp.Headers.RetryAfter.Delta.HasValue)
+                                waitSec = Math.Max(1, Math.Min(15, (int)resp.Headers.RetryAfter.Delta.Value.TotalSeconds));
+                            log("Open-Meteo API vrátilo 429 (Too Many Requests). Čekám " + waitSec + " s a opakuji pokus...");
+                            await Task.Delay(waitSec * 1000, ct);
+                            continue;
+                        }
+                        throw new Exception("Překročen limit bezplatného Open-Meteo API (429 Too Many Requests). Vyčkejte prosím cca 30–60 sekund nebo vyberte méně modelů.");
+                    }
+                    resp.EnsureSuccessStatusCode();
+                    return await resp.Content.ReadAsStringAsync();
+                }
             }
+            throw new Exception("Překročen limit bezplatného Open-Meteo API (429).");
         }
 
-        private async Task FetchSpatialGridAsync(
-            List<WeatherModelInfo> selectedModels,
-            int forecastDays,
-            bool useHourly,
-            WeatherParameterInfo paramInfo,
-            DateTime cleanStart,
-            DateTime cleanEnd,
-            string sectionKey,
-            string varPrefix,
-            ForecastResult result,
-            Action<string> log,
-            CancellationToken ct)
+        private static async Task FetchModelRunTimesAsync(List<WeatherModelInfo> models, ForecastResult result, CancellationToken ct)
         {
-            var gridLats = new List<string>();
-            var gridLons = new List<string>();
-            var gridPts = new List<GeoGridPoint>();
+            var tasks = new List<Task>();
+            var lockObj = new object();
 
-            for (double lat = 48.55; lat <= 51.06; lat += 0.25)
+            foreach (var m in models)
             {
-                for (double lon = 12.10; lon <= 18.85; lon += 0.35)
+                var model = m;
+                tasks.Add(Task.Run(async () =>
                 {
-                    double rLat = Math.Round(lat, 2);
-                    double rLon = Math.Round(lon, 2);
-                    gridLats.Add(rLat.ToString("0.00", CultureInfo.InvariantCulture));
-                    gridLons.Add(rLon.ToString("0.00", CultureInfo.InvariantCulture));
-                    gridPts.Add(new GeoGridPoint
+                    try
                     {
-                        Latitude = rLat,
-                        Longitude = rLon,
-                        RegionCode = CzechData.FindRegionCode(rLat, rLon)
-                    });
-                }
+                        string metaUrl = "https://api.open-meteo.com/data/" + model.Id + "/static/meta.json";
+                        string metaJson = await _httpClient.GetStringAsync(metaUrl);
+                        var ser = new JavaScriptSerializer();
+                        var dict = ser.DeserializeObject(metaJson) as Dictionary<string, object>;
+                        if (dict != null && dict.ContainsKey("last_run_initialisation_time") && dict["last_run_initialisation_time"] != null)
+                        {
+                            long unixSec = Convert.ToInt64(dict["last_run_initialisation_time"], CultureInfo.InvariantCulture);
+                            DateTime utcRun = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(unixSec);
+                            DateTime localRun = utcRun.ToLocalTime();
+                            string formatted = string.Format(CultureInfo.InvariantCulture, "{0:dd.MM.yyyy HH:mm} ({1:HH}Z)", localRun, utcRun);
+                            lock (lockObj)
+                            {
+                                result.ModelRunTimes[model.Id] = formatted;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Non-critical metadata lookup
+                    }
+                }, ct));
             }
 
-            var modelIds = new List<string>();
-            foreach (var m in selectedModels)
-                modelIds.Add(m.Id);
-
-            string url;
-            if (useHourly)
+            try
             {
-                string sParam = cleanStart.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
-                string eParam = cleanEnd.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
-                url = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "https://api.open-meteo.com/v1/forecast?latitude={0}&longitude={1}&hourly={2}&models={3}&timezone=Europe%2FPrague&start_hour={4}&end_hour={5}",
-                    string.Join(",", gridLats),
-                    string.Join(",", gridLons),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    Uri.EscapeDataString(sParam),
-                    Uri.EscapeDataString(eParam)
-                );
+                await Task.WhenAll(tasks);
             }
-            else if (paramInfo.ForceHourly)
+            catch
             {
-                url = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "https://api.open-meteo.com/v1/forecast?latitude={0}&longitude={1}&hourly={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
-                    string.Join(",", gridLats),
-                    string.Join(",", gridLons),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    forecastDays
-                );
             }
-            else
-            {
-                url = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "https://api.open-meteo.com/v1/forecast?latitude={0}&longitude={1}&daily={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
-                    string.Join(",", gridLats),
-                    string.Join(",", gridLons),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    forecastDays
-                );
-            }
-
-            log("Stahuji prostorovou síť (" + gridPts.Count + " bodů) pro přesné mapové snímky...");
-            string json = await GetStringWithCancelAsync(url, ct);
-
-            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            object parsed = serializer.DeserializeObject(json);
-            object[] items = parsed as object[] ?? new object[] { parsed };
-
-            int count = Math.Min(items.Length, gridPts.Count);
-            for (int i = 0; i < count; i++)
-            {
-                var itemDict = items[i] as Dictionary<string, object>;
-                if (itemDict == null || !itemDict.ContainsKey(sectionKey))
-                    continue;
-
-                var section = itemDict[sectionKey] as Dictionary<string, object>;
-                if (section == null)
-                    continue;
-
-                foreach (var model in selectedModels)
-                {
-                    bool single = selectedModels.Count == 1;
-                    gridPts[i].ModelValues[model.Id] = ExtractModelValue(section, model.Id, single, paramInfo, varPrefix);
-                    gridPts[i].ModelSeries[model.Id] = ExtractModelSeries(section, model.Id, single, paramInfo, varPrefix);
-                }
-            }
-
-            result.GridPoints = gridPts;
-            log("Prostorová síť (" + count + " bodů) načtena.");
         }
 
         private async Task TryFetchMeteologixApiAsync(string apiKey, ForecastResult result, DateTime? startHour, DateTime? endHour, Action<string> log)
