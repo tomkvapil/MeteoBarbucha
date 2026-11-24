@@ -41,8 +41,15 @@ namespace MeteoSrazky
             _regionCode = regionCode;
             _modelName = modelName;
             _forecastDays = Math.Max(1, Math.Min(3, result.ForecastDays));
-            // ALADIN CZ 1km is surface-only; use ALADIN Central Europe 2km for vertical pressure levels
-            _apiModelId = modelKey == "chmi_aladin_cz_1km" ? "chmi_aladin_central_europe_2km" : modelKey;
+            // Map surface-only or alternative models to upper-air capable Open-Meteo models for vertical sounding
+            if (modelKey == "chmi_aladin_cz_1km")
+                _apiModelId = "chmi_aladin_central_europe_2km";
+            else if (modelKey == "brightsky_dwd")
+                _apiModelId = "icon_eu";
+            else if (modelKey == "metno_seamless" || (modelKey != null && modelKey.StartsWith("meteologix_", StringComparison.OrdinalIgnoreCase)))
+                _apiModelId = "ecmwf_ifs025";
+            else
+                _apiModelId = modelKey;
 
             Text = string.Format(
                 CultureInfo.InvariantCulture,
@@ -98,12 +105,19 @@ namespace MeteoSrazky
                     vars.Add("wind_speed_" + p + "hPa");
                 }
 
-                string url = string.Format(
+                string query = string.Format(
                     CultureInfo.InvariantCulture,
-                    "https://api.open-meteo.com/v1/forecast?latitude={0:0.00}&longitude={1:0.00}&hourly={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
+                    "latitude={0:0.00}&longitude={1:0.00}&hourly={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
                     _lat, _lon, string.Join(",", vars), _apiModelId, _forecastDays);
+                var saved = SettingsManager.Load();
+                string url = WeatherService.BuildOpenMeteoForecastUrl(query, saved != null ? saved.OpenMeteoCustomKeyOrUrl : null);
 
-                string json = await _http.GetStringAsync(url);
+                string json = DiskCache.TryGet(url);
+                if (string.IsNullOrEmpty(json))
+                {
+                    json = await _http.GetStringAsync(url);
+                    DiskCache.Put(url, json);
+                }
                 var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
                 var root = ser.DeserializeObject(json) as Dictionary<string, object>;
                 if (root == null || !root.ContainsKey("hourly"))

@@ -37,6 +37,45 @@ namespace MeteoSrazky
             return null;
         }
 
+        public static bool IsNearOrInsideCzechia(double lat, double lon, double bufferDeg)
+        {
+            if (FindRegionCode(lat, lon) != null)
+                return true;
+
+            double maxDist2 = bufferDeg * bufferDeg;
+            for (int i = 0; i < CzechBorderLatLon.Length; i++)
+            {
+                double dLat = lat - CzechBorderLatLon[i].Y;
+                double dLon = (lon - CzechBorderLatLon[i].X) * 0.65;
+                if (dLat * dLat + dLon * dLon <= maxDist2)
+                    return true;
+            }
+
+            for (int r = 0; r < CzechGeoData.KrajePolygons.Length; r++)
+            {
+                float[] ring = CzechGeoData.KrajePolygons[r];
+                int n = ring.Length / 2;
+                for (int k = 0; k < n; k += 3)
+                {
+                    double dLat = lat - ring[k * 2 + 1];
+                    double dLon = (lon - ring[k * 2]) * 0.65;
+                    if (dLat * dLat + dLon * dLon <= maxDist2)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        public static bool IsOpenMeteoModel(string modelId)
+        {
+            if (string.IsNullOrEmpty(modelId)) return false;
+            if (modelId == AlternativeWeatherProviders.MetNoId || modelId == AlternativeWeatherProviders.BrightSkyId)
+                return false;
+            if (modelId.StartsWith("meteologix_", StringComparison.OrdinalIgnoreCase))
+                return false;
+            return true;
+        }
+
         private static void EnsurePolygonRegionMapping()
         {
             if (_polygonRegionCodes != null) return;
@@ -116,7 +155,9 @@ namespace MeteoSrazky
             new WeatherModelInfo { Id = "gem_global", DisplayName = "GEM Global", Provider = "CMC" },
             new WeatherModelInfo { Id = "jma_seamless", DisplayName = "JMA Seamless", Provider = "JMA" },
             new WeatherModelInfo { Id = "ukmo_seamless", DisplayName = "UKMO Seamless", Provider = "Met Office" },
-            new WeatherModelInfo { Id = "meteofrance_arpege_europe", DisplayName = "ARPEGE Europe", Provider = "Météo-France" }
+            new WeatherModelInfo { Id = "meteofrance_arpege_europe", DisplayName = "ARPEGE Europe", Provider = "Météo-France" },
+            new WeatherModelInfo { Id = "metno_seamless", DisplayName = "MET Norway (YR.no / ECMWF)", Provider = "MET Norway" },
+            new WeatherModelInfo { Id = "brightsky_dwd", DisplayName = "Bright Sky (DWD Open Data)", Provider = "DWD / BrightSky" }
         };
 
         // Simplified geographic outline of Czechia (Lon, Lat) for map snapshot rendering

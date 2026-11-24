@@ -27,6 +27,8 @@ namespace MeteoSrazky
         private NumericUpDown _numWarn;
         private TrackBar _trkTimeStep;
         private Label _lblTimeStep;
+        private Button _btnPlayTimeline;
+        private System.Windows.Forms.Timer _timelinePlayTimer;
         private ComboBox _cmbAggMode;
         private RadioButton _rbDays;
         private RadioButton _rbHours;
@@ -39,10 +41,12 @@ namespace MeteoSrazky
         private TextBox _txtApiKey;
         private Button _btnVerifyKey;
         private Label _lblApiStatus;
+        private TextBox _txtOpenMeteoKey;
         private TextBox _txtOutputDir;
         private Button _btnBrowse;
         private Button _btnRun;
         private Button _btnSaveAll;
+        private Button _btnClearCache;
         private CheckBox _chkAutoRun;
         private ComboBox _cmbAutoHours;
         private System.Windows.Forms.Timer _autoTimer;
@@ -298,8 +302,8 @@ namespace MeteoSrazky
             };
             _cmbAggMode.Items.AddRange(new object[]
             {
-                "Průměr v kraji (ze sítě 220 bodů)",
-                "Maximum v kraji (ze sítě 220 bodů)",
+                "Průměr v kraji (ze sítě bodů ČR)",
+                "Maximum v kraji (ze sítě bodů ČR)",
                 "Krajské město (1 bod)"
             });
             _cmbAggMode.SelectedIndex = 0;
@@ -410,12 +414,23 @@ namespace MeteoSrazky
             };
             _cmbDataSource.Items.AddRange(new object[]
             {
+                "Automaticky (více zdrojů + záloha při 429)",
+                "Alternativní zdroje (MET Norway + Bright Sky)",
                 "Preferovat Meteologix API + Open-Meteo",
-                "Pouze Open-Meteo API (zdarma)",
+                "Pouze Open-Meteo API",
                 "Pouze Meteologix / Kachelmann API"
             });
             _cmbDataSource.SelectedIndex = 0;
-            y += 30;
+            y += 28;
+
+            var lblOmKey = new Label { Text = "Open-Meteo klíč / vlastní URL (volitelné):", Font = new Font("Segoe UI", 8.8f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
+            y += 20;
+            _txtOpenMeteoKey = new TextBox
+            {
+                Location = new Point(16, y),
+                Width = 286
+            };
+            y += 26;
 
             var lblApi = new Label { Text = "Meteologix API klíč (X-API-Key):", Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
             y += 22;
@@ -440,16 +455,16 @@ namespace MeteoSrazky
             y += 26;
             _lblApiStatus = new Label
             {
-                Text = "Klíč neověřen (bez klíče se použije Open-Meteo).",
+                Text = "Klíč neověřen (bez klíče běží otevřené zdroje).",
                 ForeColor = Color.FromArgb(100, 116, 139),
                 Font = new Font("Segoe UI", 8.2f),
                 Location = new Point(16, y),
                 Size = new Size(286, 18)
             };
-            y += 24;
+            y += 22;
 
             var lblOut = new Label { Text = "Složka pro snímky a tabulky:", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
-            y += 24;
+            y += 22;
             _txtOutputDir = new TextBox
             {
                 Location = new Point(16, y),
@@ -464,13 +479,13 @@ namespace MeteoSrazky
                 FlatStyle = FlatStyle.Flat
             };
             _btnBrowse.Click += (s, e) => BrowseFolder();
-            y += 42;
+            y += 38;
 
             _btnRun = new Button
             {
                 Text = "Stáhnout data a spočítat",
                 Location = new Point(16, y),
-                Size = new Size(286, 40),
+                Size = new Size(286, 38),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
@@ -479,13 +494,13 @@ namespace MeteoSrazky
             };
             _btnRun.FlatAppearance.BorderSize = 0;
             _btnRun.Click += async (s, e) => await RunFetchAndProcessAsync();
-            y += 46;
+            y += 43;
 
             _btnSaveAll = new Button
             {
                 Text = "Uložit snímky a tabulku",
                 Location = new Point(16, y),
-                Size = new Size(286, 38),
+                Size = new Size(286, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129),
                 ForeColor = Color.White,
@@ -495,7 +510,22 @@ namespace MeteoSrazky
             };
             _btnSaveAll.FlatAppearance.BorderSize = 0;
             _btnSaveAll.Click += (s, e) => SaveAllResults(true);
-            y += 46;
+            y += 41;
+
+            _btnClearCache = new Button
+            {
+                Text = "Vymazat mezipaměť (cache)",
+                Location = new Point(16, y),
+                Size = new Size(286, 29),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(241, 245, 249),
+                ForeColor = Color.FromArgb(51, 65, 85),
+                Font = new Font("Segoe UI", 8.8f),
+                Cursor = Cursors.Hand
+            };
+            _btnClearCache.FlatAppearance.BorderColor = Color.FromArgb(203, 213, 225);
+            _btnClearCache.Click += (s, e) => ClearAllCaches();
+            y += 36;
 
             _chkAutoRun = new CheckBox
             {
@@ -527,9 +557,9 @@ namespace MeteoSrazky
                 lblAgg, _cmbAggMode,
                 lblHorizont, _rbDays, _cmbDays, _rbHours, lblOd, _dtpStart, lblDo, _dtpEnd, _lblHourRange,
                 lblModels, lnkAll, lnkNone, _chkModels,
-                lblSource, _cmbDataSource, lblApi, _txtApiKey, _btnVerifyKey, _lblApiStatus,
+                lblSource, _cmbDataSource, lblOmKey, _txtOpenMeteoKey, lblApi, _txtApiKey, _btnVerifyKey, _lblApiStatus,
                 lblOut, _txtOutputDir, _btnBrowse,
-                _btnRun, _btnSaveAll, _chkAutoRun, _cmbAutoHours
+                _btnRun, _btnSaveAll, _btnClearCache, _chkAutoRun, _cmbAutoHours
             });
 
             // Main TabControl
@@ -554,10 +584,28 @@ namespace MeteoSrazky
                 Location = new Point(10, 10),
                 AutoSize = true
             };
+            _btnPlayTimeline = new Button
+            {
+                Text = "▶ Přehrát",
+                Location = new Point(92, 5),
+                Size = new Size(86, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8.8f, FontStyle.Bold),
+                Enabled = false,
+                Cursor = Cursors.Hand
+            };
+            _btnPlayTimeline.FlatAppearance.BorderSize = 0;
+            _btnPlayTimeline.Click += (s, e) => ToggleTimelinePlayback();
+
+            _timelinePlayTimer = new System.Windows.Forms.Timer { Interval = 900 };
+            _timelinePlayTimer.Tick += (s, e) => AdvanceTimelineStep();
+
             _trkTimeStep = new TrackBar
             {
-                Location = new Point(95, 3),
-                Width = 420,
+                Location = new Point(184, 3),
+                Width = 370,
                 Minimum = -1,
                 Maximum = -1,
                 Value = -1,
@@ -569,11 +617,12 @@ namespace MeteoSrazky
                 Text = "Celé období (souhrn)",
                 ForeColor = Color.FromArgb(37, 99, 235),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Location = new Point(525, 10),
+                Location = new Point(562, 10),
                 AutoSize = true
             };
             _trkTimeStep.ValueChanged += (s, e) => OnTimeStepChanged();
             timelineBar.Controls.Add(lblTimeTitle);
+            timelineBar.Controls.Add(_btnPlayTimeline);
             timelineBar.Controls.Add(_trkTimeStep);
             timelineBar.Controls.Add(_lblTimeStep);
 
@@ -941,9 +990,66 @@ namespace MeteoSrazky
 
         private DataSourcePreference GetSelectedDataSource()
         {
-            if (_cmbDataSource.SelectedIndex == 1) return DataSourcePreference.OpenMeteoOnly;
-            if (_cmbDataSource.SelectedIndex == 2) return DataSourcePreference.MeteologixOnly;
-            return DataSourcePreference.PreferMeteologix;
+            switch (_cmbDataSource.SelectedIndex)
+            {
+                case 1: return DataSourcePreference.AlternativeOpenOnly;
+                case 2: return DataSourcePreference.PreferMeteologix;
+                case 3: return DataSourcePreference.OpenMeteoOnly;
+                case 4: return DataSourcePreference.MeteologixOnly;
+                default: return DataSourcePreference.AutoMultiSource;
+            }
+        }
+
+        private void ClearAllCaches()
+        {
+            _resultCache.Clear();
+            _cacheOrder.Clear();
+            int deleted = DiskCache.ClearAll();
+            AppendLog("Mezipaměť vymazána (" + deleted + " souborů na disku). Další stažení načte čerstvá data.");
+            _lblStatus.Text = "Mezipaměť vymazána (" + deleted + " souborů). Klikněte na 'Stáhnout data a spočítat'.";
+        }
+
+        private void ToggleTimelinePlayback()
+        {
+            if (_timelinePlayTimer.Enabled)
+            {
+                StopTimelinePlayback();
+                return;
+            }
+            if (!_trkTimeStep.Enabled || _trkTimeStep.Maximum < 0)
+                return;
+
+            if (_trkTimeStep.Value < 0 || _trkTimeStep.Value >= _trkTimeStep.Maximum)
+                _trkTimeStep.Value = 0;
+
+            _btnPlayTimeline.Text = "⏸ Pauza";
+            _btnPlayTimeline.BackColor = Color.FromArgb(217, 119, 6);
+            _timelinePlayTimer.Start();
+        }
+
+        private void StopTimelinePlayback()
+        {
+            if (_timelinePlayTimer != null)
+                _timelinePlayTimer.Stop();
+            if (_btnPlayTimeline != null)
+            {
+                _btnPlayTimeline.Text = "▶ Přehrát";
+                _btnPlayTimeline.BackColor = Color.FromArgb(37, 99, 235);
+            }
+        }
+
+        private void AdvanceTimelineStep()
+        {
+            if (_lastResult == null || !_trkTimeStep.Enabled || _trkTimeStep.Maximum < 0)
+            {
+                StopTimelinePlayback();
+                return;
+            }
+
+            int next = _trkTimeStep.Value + 1;
+            if (next < 0 || next > _trkTimeStep.Maximum)
+                next = 0;
+            _trkTimeStep.Value = next;
         }
 
         private async System.Threading.Tasks.Task VerifyApiKeyAsync()
@@ -958,14 +1064,14 @@ namespace MeteoSrazky
             _btnVerifyKey.Enabled = true;
         }
 
-        private string BuildCacheKey(List<WeatherModelInfo> models, int days, DateTime? startHour, DateTime? endHour, WeatherParameter param, string apiKey, DataSourcePreference ds)
+        private string BuildCacheKey(List<WeatherModelInfo> models, int days, DateTime? startHour, DateTime? endHour, WeatherParameter param, string apiKey, DataSourcePreference ds, string omKey)
         {
             var ids = new List<string>();
             foreach (var m in models) ids.Add(m.Id);
             string period = (startHour.HasValue && endHour.HasValue)
                 ? startHour.Value.ToString("yyyyMMddHH") + "-" + endHour.Value.ToString("yyyyMMddHH")
                 : "D" + days;
-            return ds + "|" + param + "|" + period + "|" + string.Join(",", ids) + "|" + (apiKey ?? "").Trim();
+            return ds + "|" + param + "|" + period + "|" + string.Join(",", ids) + "|" + (apiKey ?? "").Trim() + "|" + (omKey ?? "").Trim();
         }
 
         private void UpdateDefaultWarningForParam()
@@ -1012,6 +1118,7 @@ namespace MeteoSrazky
 
         private void SetupTimelineForResult(ForecastResult result)
         {
+            StopTimelinePlayback();
             _suppressAutoFetch = true;
             try
             {
@@ -1021,6 +1128,7 @@ namespace MeteoSrazky
                     _trkTimeStep.Maximum = result.TimeSteps.Count - 1;
                     _trkTimeStep.Value = Math.Max(-1, Math.Min(result.TimeSteps.Count - 1, result.SelectedTimeStepIndex));
                     _trkTimeStep.Enabled = true;
+                    _btnPlayTimeline.Enabled = true;
                 }
                 else
                 {
@@ -1028,6 +1136,7 @@ namespace MeteoSrazky
                     _trkTimeStep.Maximum = -1;
                     _trkTimeStep.Value = -1;
                     _trkTimeStep.Enabled = false;
+                    _btnPlayTimeline.Enabled = false;
                 }
                 UpdateTimeStepLabel();
             }
@@ -1058,8 +1167,10 @@ namespace MeteoSrazky
 
         private async System.Threading.Tasks.Task RunFetchAndProcessAsync(bool useCache = false)
         {
+            StopTimelinePlayback();
+            var ds = GetSelectedDataSource();
             var models = GetSelectedModels();
-            if (models.Count == 0)
+            if (models.Count == 0 && ds != DataSourcePreference.AlternativeOpenOnly && ds != DataSourcePreference.MeteologixOnly)
             {
                 MessageBox.Show(this, "Vyberte alespoň jeden meteorologický model.", "Upozornění", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -1081,12 +1192,12 @@ namespace MeteoSrazky
             {
                 int days = GetSelectedDays();
                 string apiKey = _txtApiKey.Text;
+                string omKey = _txtOpenMeteoKey.Text;
                 DateTime? startHour = _rbHours.Checked ? (DateTime?)_dtpStart.Value : null;
                 DateTime? endHour = _rbHours.Checked ? (DateTime?)_dtpEnd.Value : null;
                 WeatherParameter param = GetSelectedParameter();
-                DataSourcePreference ds = GetSelectedDataSource();
 
-                string cacheKey = BuildCacheKey(models, days, startHour, endHour, param, apiKey, ds);
+                string cacheKey = BuildCacheKey(models, days, startHour, endHour, param, apiKey, ds, omKey);
                 ForecastResult cached;
                 if (useCache && _resultCache.TryGetValue(cacheKey, out cached))
                 {
@@ -1095,7 +1206,7 @@ namespace MeteoSrazky
                 }
                 else
                 {
-                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog, ct, ds);
+                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog, ct, ds, omKey);
                     if (ct.IsCancellationRequested) return;
 
                     _resultCache[cacheKey] = _lastResult;
@@ -1229,6 +1340,8 @@ namespace MeteoSrazky
                     _txtOutputDir.Text = s.OutputDir;
                 if (!string.IsNullOrEmpty(s.MeteologixApiKey))
                     _txtApiKey.Text = s.MeteologixApiKey;
+                if (!string.IsNullOrEmpty(s.OpenMeteoCustomKeyOrUrl))
+                    _txtOpenMeteoKey.Text = s.OpenMeteoCustomKeyOrUrl;
                 if (s.DataSourceIndex >= 0 && s.DataSourceIndex < _cmbDataSource.Items.Count)
                     _cmbDataSource.SelectedIndex = s.DataSourceIndex;
                 if (!string.IsNullOrWhiteSpace(s.UpdateManifestUrl))
@@ -1247,6 +1360,11 @@ namespace MeteoSrazky
                 if (s.SelectedModelIds != null && s.SelectedModelIds.Count > 0)
                 {
                     var set = new HashSet<string>(s.SelectedModelIds);
+                    if (!s.AltModelsInitialized)
+                    {
+                        set.Add(AlternativeWeatherProviders.MetNoId);
+                        set.Add(AlternativeWeatherProviders.BrightSkyId);
+                    }
                     for (int i = 0; i < _chkModels.Items.Count; i++)
                     {
                         var m = _chkModels.Items[i] as WeatherModelInfo;
@@ -1263,11 +1381,14 @@ namespace MeteoSrazky
 
         private void SaveCurrentSettings()
         {
+            StopTimelinePlayback();
             var s = new AppSettings
             {
                 OutputDir = _txtOutputDir.Text.Trim(),
                 MeteologixApiKey = _txtApiKey.Text,
+                OpenMeteoCustomKeyOrUrl = _txtOpenMeteoKey.Text.Trim(),
                 DataSourceIndex = _cmbDataSource.SelectedIndex,
+                AltModelsInitialized = true,
                 UpdateManifestUrl = _updateManifestUrl,
                 ParamIndex = _cmbParam.SelectedIndex,
                 AggModeIndex = _cmbAggMode.SelectedIndex,

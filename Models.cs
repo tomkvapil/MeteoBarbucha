@@ -74,8 +74,10 @@ namespace MeteoSrazky
 
     public enum DataSourcePreference
     {
-        OpenMeteoOnly,
+        AutoMultiSource,
+        AlternativeOpenOnly,
         PreferMeteologix,
+        OpenMeteoOnly,
         MeteologixOnly
     }
 

@@ -49,16 +49,32 @@ namespace MeteoSrazky
 
         private static readonly object _cacheLock = new object();
         private static int _cachedGridCount = -1;
+        private static int _cachedGridHash = 0;
         private static byte[] _cachedMask;
         private static int[] _cachedIdx;     // 4 indices per pixel
         private static float[] _cachedWeights; // 4 weights per pixel
         private static int _cacheStartX, _cacheEndX, _cacheStartY, _cacheEndY;
 
+        private static int ComputeGridHash(List<GeoGridPoint> gridPoints)
+        {
+            unchecked
+            {
+                int hash = 17;
+                for (int i = 0; i < gridPoints.Count; i++)
+                {
+                    hash = hash * 31 + (int)Math.Round(gridPoints[i].Latitude * 1000);
+                    hash = hash * 31 + (int)Math.Round(gridPoints[i].Longitude * 1000);
+                }
+                return hash;
+            }
+        }
+
         private static void EnsureGridCache(List<GeoGridPoint> gridPoints, Rectangle projRect, GraphicsPath krajePath)
         {
             lock (_cacheLock)
             {
-                if (_cachedGridCount == gridPoints.Count && _cachedMask != null)
+                int gridHash = ComputeGridHash(gridPoints);
+                if (_cachedGridCount == gridPoints.Count && _cachedGridHash == gridHash && _cachedMask != null)
                     return;
 
                 int w = MapWidth;
@@ -166,6 +182,7 @@ namespace MeteoSrazky
                 _cachedIdx = indices;
                 _cachedWeights = weights;
                 _cachedGridCount = gridPoints.Count;
+                _cachedGridHash = gridHash;
             }
         }
 

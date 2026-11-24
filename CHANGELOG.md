@@ -2,6 +2,23 @@
 
 All notable changes to **MeteoBarbucha ČR** will be documented in this file.
 
+## [1.3.3] - 2026-11-24
+### Added
+- **Multi-source open weather providers (`AlternativeWeatherProviders.cs`)** to eliminate single-provider rate-limit bottlenecks:
+  - Integrated **MET Norway (`api.met.no` Locationforecast 2.0 / YR.no ECMWF blend)** and **Bright Sky (`api.brightsky.dev` DWD Open Data / MOSMIX-ICON)** — both free and requiring no API key.
+  - Added **`Automaticky (více zdrojů + záloha při 429)`** mode with automatic failover to MET Norway + Bright Sky whenever Open-Meteo returns HTTP `429 Too Many Requests`, plus a dedicated **`Alternativní zdroje (MET Norway + Bright Sky)`** mode making zero Open-Meteo requests.
+- **Timeline Play / Pause animation (`▶ Přehrát` / `⏸ Pauza`)** next to the timeline slider to animate hourly/daily forecast steps across the table, Multi-view, Detail view, and synchronized *Výběr oblast* tab.
+- **Optional Open-Meteo API key / custom server URL** input (`customer-api.open-meteo.com` or self-hosted Open-Meteo instance) persisted in `SettingsManager.cs`.
+- **Clear Cache button (`Vymazat mezipaměť (cache)`)** to purge both in-memory and 12h GZIP disk caches on demand, plus 30-minute disk caching for Open-Meteo `/static/meta.json` model run timestamps.
+### Changed
+- **~30% Open-Meteo API quota reduction** with zero loss of spatial resolution inside Czechia: kept the full `0.25° × 0.35°` grid across Czechia and a `0.38°` cross-border interpolation buffer while skipping distant foreign points.
+- Updated `MapRenderer` grid cache keying with coordinate hashing so switching between full and alternative grids recomputes exact 4-NN IDW weights cleanly.
+- Updated the built-in **User Guide (`HelpDialog.cs`)** for v1.3.3.
+### Fixed
+- Fixed **Meteologix / Kachelmannwetter API v02** endpoints in `WeatherService.cs` (`404 Not Found` caused by invalid `/trend/{model}` path):
+  - Key verification now checks `/v02/tools/astronomy/{lat}/{lon}` (token validity) and `/v02/forecast/{lat}/{lon}/3day` (location permissions).
+  - Forecast fetcher updated to `/v02/forecast/{lat}/{lon}/advanced/1h` and `/3day`, and now skips non-whitelisted regions returning HTTP `403` (`continue` instead of aborting) so Hobby-tier whitelisted locations still load.
+
 ## [1.3.2] - 2026-11-24
 ### Added
 - **Data source selector (`Zdroj dat`)** allowing users to choose between `Prefer Meteologix API + Open-Meteo`, `Open-Meteo only`, or `Meteologix / Kachelmann API only` (ideal for shared networks such as ČHMÚ to avoid Open-Meteo 429 rate limits).

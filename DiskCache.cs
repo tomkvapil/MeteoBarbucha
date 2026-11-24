@@ -9,7 +9,7 @@ namespace MeteoSrazky
     public static class DiskCache
     {
         private static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(12);
-        private const int MaxCacheFiles = 30;
+        private const int MaxCacheFiles = 300;
 
         private static string GetCacheDir()
         {
@@ -31,6 +31,11 @@ namespace MeteoSrazky
 
         public static string TryGet(string key)
         {
+            return TryGet(key, DefaultTtl);
+        }
+
+        public static string TryGet(string key, TimeSpan ttl)
+        {
             try
             {
                 string path = GetFilePath(key);
@@ -38,7 +43,7 @@ namespace MeteoSrazky
                     return null;
 
                 var info = new FileInfo(path);
-                if (DateTime.UtcNow - info.LastWriteTimeUtc > DefaultTtl)
+                if (DateTime.UtcNow - info.LastWriteTimeUtc > ttl)
                 {
                     File.Delete(path);
                     return null;
@@ -55,6 +60,32 @@ namespace MeteoSrazky
             {
                 return null;
             }
+        }
+
+        public static int ClearAll()
+        {
+            int count = 0;
+            try
+            {
+                string dir = GetCacheDir();
+                if (!Directory.Exists(dir))
+                    return 0;
+
+                var files = new DirectoryInfo(dir).GetFiles("*.json.gz");
+                foreach (var f in files)
+                {
+                    try
+                    {
+                        f.Delete();
+                        count++;
+                    }
+                    catch { }
+                }
+            }
+            catch
+            {
+            }
+            return count;
         }
 
         public static void Put(string key, string json)
