@@ -32,6 +32,33 @@ namespace MeteoSrazky
             return await FetchPrecipitationAsync(selectedModels, forecastDays, null, null, WeatherParameter.TotalPrecipitation, meteologixApiKey, log);
         }
 
+        public static async Task<Tuple<bool, string>> VerifyMeteologixApiKeyAsync(string apiKey)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+                return Tuple.Create(false, "Zadejte nejprve API klíč.");
+
+            try
+            {
+                string endpoint = "https://api.kachelmannwetter.com/v02/forecast/50.0755/14.4378/trend/ecmwf";
+                using (var req = new HttpRequestMessage(HttpMethod.Get, endpoint))
+                {
+                    req.Headers.Add("X-API-Key", apiKey.Trim());
+                    using (var resp = await _httpClient.SendAsync(req))
+                    {
+                        if (resp.IsSuccessStatusCode)
+                            return Tuple.Create(true, "✓ Klíč je platný a funkční (HTTP 200 OK)");
+                        if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
+                            return Tuple.Create(false, "✗ Neplatný nebo neautorizovaný klíč (" + (int)resp.StatusCode + ")");
+                        return Tuple.Create(false, "✗ Chyba API: HTTP " + (int)resp.StatusCode + " " + resp.ReasonPhrase);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Tuple.Create(false, "✗ Chyba připojení: " + ex.Message);
+            }
+        }
+
         public async Task<ForecastResult> FetchPrecipitationAsync(
             List<WeatherModelInfo> selectedModels,
             int forecastDays,
@@ -40,10 +67,14 @@ namespace MeteoSrazky
             WeatherParameter parameter,
             string meteologixApiKey,
             Action<string> log,
-            CancellationToken ct = default(CancellationToken))
+            CancellationToken ct = default(CancellationToken),
+            DataSourcePreference dataSource = DataSourcePreference.PreferMeteologix)
         {
             if (selectedModels == null || selectedModels.Count == 0)
                 throw new ArgumentException("Vyberte alespoň jeden meteorologický model.");
+
+            if (dataSource == DataSourcePreference.MeteologixOnly && string.IsNullOrWhiteSpace(meteologixApiKey))
+                throw new ArgumentException("Pro režim 'Pouze Meteologix API' musíte zadat platný X-API-Key klíč.");
 
             bool useHourly = startHour.HasValue && endHour.HasValue;
             DateTime cleanStart = DateTime.MinValue;
@@ -64,8 +95,23 @@ namespace MeteoSrazky
                 ForecastDays = useHourly ? Math.Max(1, (int)Math.Ceiling((cleanEnd - cleanStart).TotalDays)) : forecastDays,
                 Parameter = parameter,
                 Unit = paramInfo.Unit,
-                Models = new List<WeatherModelInfo>(selectedModels)
+                Models = dataSource == DataSourcePreference.MeteologixOnly ? new List<WeatherModelInfo>() : new List<WeatherModelInfo>(selectedModels),
+                DataSourceLabel = dataSource == DataSourcePreference.MeteologixOnly ? "Meteologix API" : "Open-Meteo API"
             };
+
+            foreach (var r in CzechData.Regions)
+                result.RegionModelSums[r.Code] = new Dictionary<string, double?>();
+
+            if (dataSource == DataSourcePreference.MeteologixOnly)
+            {
+                result.PeriodDescription = useHourly
+                    ? string.Format(CultureInfo.InvariantCulture, "{0:dd.MM.yyyy HH:00} – {1:dd.MM.yyyy HH:00} ({2:0} h)", cleanStart, cleanEnd, (cleanEnd - cleanStart).TotalHours)
+                    : forecastDays + " dní";
+                await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, useHourly ? (DateTime?)cleanStart : null, useHourly ? (DateTime?)cleanEnd : null, log);
+                if (result.Models.Count == 0)
+                    throw new Exception("Meteologix API nevrátilo žádná data. Ověřte platnost API klíče.");
+                return result;
+            }
 
             // Build single combined batch: 14 regional centroids + 220 spatial grid points (1 HTTP call!)
             var latList = new List<string>();
@@ -242,10 +288,13 @@ namespace MeteoSrazky
 
             log("Open-Meteo data úspěšně zpracována (" + gridPts.Count + " bodů sítě).");
 
-            // Optional Meteologix / Kachelmannwetter API check if key is provided
-            if (!string.IsNullOrWhiteSpace(meteologixApiKey))
+            // Optional Meteologix / Kachelmannwetter API check if key is provided and allowed by DataSourcePreference
+            if (dataSource != DataSourcePreference.OpenMeteoOnly && !string.IsNullOrWhiteSpace(meteologixApiKey))
             {
+                int beforeCount = result.Models.Count;
                 await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, useHourly ? (DateTime?)cleanStart : null, useHourly ? (DateTime?)cleanEnd : null, log);
+                if (result.Models.Count > beforeCount)
+                    result.DataSourceLabel = "Meteologix API + Open-Meteo";
             }
 
             return result;

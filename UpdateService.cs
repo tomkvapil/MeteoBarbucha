@@ -22,8 +22,8 @@ namespace MeteoSrazky
 
     public static class UpdateService
     {
-        public const string CurrentVersion = "1.3.1";
-        public const string ReleaseDate = "23.11.2026";
+        public const string CurrentVersion = "1.3.2";
+        public const string ReleaseDate = "24.11.2026";
         public const string DefaultManifestUrl = "https://api.github.com/repos/tomkvapil/MeteoBarbucha/releases/latest";
 
         private static readonly HttpClient _http = CreateClient();

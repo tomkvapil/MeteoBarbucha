@@ -35,7 +35,10 @@ namespace MeteoSrazky
         private DateTimePicker _dtpEnd;
         private Label _lblHourRange;
         private CheckedListBox _chkModels;
+        private ComboBox _cmbDataSource;
         private TextBox _txtApiKey;
+        private Button _btnVerifyKey;
+        private Label _lblApiStatus;
         private TextBox _txtOutputDir;
         private Button _btnBrowse;
         private Button _btnRun;
@@ -397,24 +400,53 @@ namespace MeteoSrazky
                 _chkModels.Items.Add(m, true);
             y += 188;
 
-            var lblApi = new Label { Text = "Meteologix API klíč (volitelné):", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
-            y += 24;
-            _txtApiKey = new TextBox
+            var lblSource = new Label { Text = "Zdroj dat:", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
+            y += 22;
+            _cmbDataSource = new ComboBox
             {
                 Location = new Point(16, y),
                 Width = 286,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _cmbDataSource.Items.AddRange(new object[]
+            {
+                "Preferovat Meteologix API + Open-Meteo",
+                "Pouze Open-Meteo API (zdarma)",
+                "Pouze Meteologix / Kachelmann API"
+            });
+            _cmbDataSource.SelectedIndex = 0;
+            y += 30;
+
+            var lblApi = new Label { Text = "Meteologix API klíč (X-API-Key):", Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
+            y += 22;
+            _txtApiKey = new TextBox
+            {
+                Location = new Point(16, y),
+                Width = 200,
                 UseSystemPasswordChar = true
             };
-            y += 30;
-            var lblApiHint = new Label
+            _btnVerifyKey = new Button
             {
-                Text = "Bez klíče se používá bezplatné Open-Meteo API.",
+                Text = "Ověřit",
+                Location = new Point(222, y - 1),
+                Size = new Size(80, 25),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(30, 41, 59),
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            _btnVerifyKey.FlatAppearance.BorderSize = 0;
+            _btnVerifyKey.Click += async (s, e) => await VerifyApiKeyAsync();
+            y += 26;
+            _lblApiStatus = new Label
+            {
+                Text = "Klíč neověřen (bez klíče se použije Open-Meteo).",
                 ForeColor = Color.FromArgb(100, 116, 139),
                 Font = new Font("Segoe UI", 8.2f),
                 Location = new Point(16, y),
-                AutoSize = true
+                Size = new Size(286, 18)
             };
-            y += 26;
+            y += 24;
 
             var lblOut = new Label { Text = "Složka pro snímky a tabulky:", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), Location = new Point(16, y), AutoSize = true };
             y += 24;
@@ -467,7 +499,7 @@ namespace MeteoSrazky
 
             _chkAutoRun = new CheckBox
             {
-                Text = "Auto-stahovat a ukládat každých:",
+                Text = "Automaticky stahovat každých:",
                 Location = new Point(16, y + 3),
                 AutoSize = true
             };
@@ -483,10 +515,8 @@ namespace MeteoSrazky
             _autoTimer = new System.Windows.Forms.Timer();
             _autoTimer.Tick += async (s, e) =>
             {
-                AppendLog("Spouštím automatické stažení a uložení...");
-                await RunFetchAndProcessAsync();
-                if (_lastResult != null)
-                    SaveAllResults(false);
+                AppendLog("Spouštím automatické stažení dat...");
+                await RunFetchAndProcessAsync(false);
             };
             _chkAutoRun.CheckedChanged += (s, e) => UpdateAutoTimer();
             _cmbAutoHours.SelectedIndexChanged += (s, e) => UpdateAutoTimer();
@@ -497,7 +527,7 @@ namespace MeteoSrazky
                 lblAgg, _cmbAggMode,
                 lblHorizont, _rbDays, _cmbDays, _rbHours, lblOd, _dtpStart, lblDo, _dtpEnd, _lblHourRange,
                 lblModels, lnkAll, lnkNone, _chkModels,
-                lblApi, _txtApiKey, lblApiHint,
+                lblSource, _cmbDataSource, lblApi, _txtApiKey, _btnVerifyKey, _lblApiStatus,
                 lblOut, _txtOutputDir, _btnBrowse,
                 _btnRun, _btnSaveAll, _chkAutoRun, _cmbAutoHours
             });
@@ -909,14 +939,33 @@ namespace MeteoSrazky
             AppendLog("Automatické stahování zapnuto (každých " + hours + " h).");
         }
 
-        private string BuildCacheKey(List<WeatherModelInfo> models, int days, DateTime? startHour, DateTime? endHour, WeatherParameter param, string apiKey)
+        private DataSourcePreference GetSelectedDataSource()
+        {
+            if (_cmbDataSource.SelectedIndex == 1) return DataSourcePreference.OpenMeteoOnly;
+            if (_cmbDataSource.SelectedIndex == 2) return DataSourcePreference.MeteologixOnly;
+            return DataSourcePreference.PreferMeteologix;
+        }
+
+        private async System.Threading.Tasks.Task VerifyApiKeyAsync()
+        {
+            _btnVerifyKey.Enabled = false;
+            _lblApiStatus.Text = "Ověřuji API klíč...";
+            _lblApiStatus.ForeColor = Color.FromArgb(37, 99, 235);
+            var res = await WeatherService.VerifyMeteologixApiKeyAsync(_txtApiKey.Text);
+            _lblApiStatus.Text = res.Item2;
+            _lblApiStatus.ForeColor = res.Item1 ? Color.FromArgb(5, 150, 105) : Color.FromArgb(220, 38, 38);
+            AppendLog("Ověření Meteologix API klíče: " + res.Item2);
+            _btnVerifyKey.Enabled = true;
+        }
+
+        private string BuildCacheKey(List<WeatherModelInfo> models, int days, DateTime? startHour, DateTime? endHour, WeatherParameter param, string apiKey, DataSourcePreference ds)
         {
             var ids = new List<string>();
             foreach (var m in models) ids.Add(m.Id);
             string period = (startHour.HasValue && endHour.HasValue)
                 ? startHour.Value.ToString("yyyyMMddHH") + "-" + endHour.Value.ToString("yyyyMMddHH")
                 : "D" + days;
-            return param + "|" + period + "|" + string.Join(",", ids) + "|" + (apiKey ?? "").Trim();
+            return ds + "|" + param + "|" + period + "|" + string.Join(",", ids) + "|" + (apiKey ?? "").Trim();
         }
 
         private void UpdateDefaultWarningForParam()
@@ -1035,8 +1084,9 @@ namespace MeteoSrazky
                 DateTime? startHour = _rbHours.Checked ? (DateTime?)_dtpStart.Value : null;
                 DateTime? endHour = _rbHours.Checked ? (DateTime?)_dtpEnd.Value : null;
                 WeatherParameter param = GetSelectedParameter();
+                DataSourcePreference ds = GetSelectedDataSource();
 
-                string cacheKey = BuildCacheKey(models, days, startHour, endHour, param, apiKey);
+                string cacheKey = BuildCacheKey(models, days, startHour, endHour, param, apiKey, ds);
                 ForecastResult cached;
                 if (useCache && _resultCache.TryGetValue(cacheKey, out cached))
                 {
@@ -1045,7 +1095,7 @@ namespace MeteoSrazky
                 }
                 else
                 {
-                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog, ct);
+                    _lastResult = await _weatherService.FetchPrecipitationAsync(models, days, startHour, endHour, param, apiKey, AppendLog, ct, ds);
                     if (ct.IsCancellationRequested) return;
 
                     _resultCache[cacheKey] = _lastResult;
@@ -1066,7 +1116,7 @@ namespace MeteoSrazky
                 BuildSummaryMaps(_lastResult);
 
                 _btnSaveAll.Enabled = true;
-                _lblStatus.Text = "Hotovo (" + _lastResult.PeriodDescription + "). Kliknutím na mapu zobrazíte meteogram.";
+                _lblStatus.Text = "Hotovo [" + (_lastResult.DataSourceLabel ?? "API") + "] (" + _lastResult.PeriodDescription + "). Kliknutím na mapu zobrazíte graf.";
             }
             catch (OperationCanceledException)
             {
@@ -1179,6 +1229,8 @@ namespace MeteoSrazky
                     _txtOutputDir.Text = s.OutputDir;
                 if (!string.IsNullOrEmpty(s.MeteologixApiKey))
                     _txtApiKey.Text = s.MeteologixApiKey;
+                if (s.DataSourceIndex >= 0 && s.DataSourceIndex < _cmbDataSource.Items.Count)
+                    _cmbDataSource.SelectedIndex = s.DataSourceIndex;
                 if (!string.IsNullOrWhiteSpace(s.UpdateManifestUrl))
                     _updateManifestUrl = s.UpdateManifestUrl;
                 if (s.ParamIndex >= 0 && s.ParamIndex < _cmbParam.Items.Count)
@@ -1215,6 +1267,7 @@ namespace MeteoSrazky
             {
                 OutputDir = _txtOutputDir.Text.Trim(),
                 MeteologixApiKey = _txtApiKey.Text,
+                DataSourceIndex = _cmbDataSource.SelectedIndex,
                 UpdateManifestUrl = _updateManifestUrl,
                 ParamIndex = _cmbParam.SelectedIndex,
                 AggModeIndex = _cmbAggMode.SelectedIndex,

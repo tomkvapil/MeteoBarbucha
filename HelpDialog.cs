@@ -85,11 +85,13 @@ namespace MeteoSrazky
                 "• Mapy jsou vyhlazené jemnou 4-bodovou IDW interpolací z 220bodové sítě.\n" +
                 "• Záložka Výběr oblast: Synchronizuje přiblížení a posun napříč všemi modely najednou (předvolby oblastí, Lupa +/-, klávesy +, −, 0, šipky). Najetím myši se ukáže plovoucí štítek s přesnou hodnotou pod kurzorem.\n\n");
 
-            AppendHeading(rtb, "4. Dostupné modely a 12h mezipaměť", 11.5f);
+            AppendHeading(rtb, "4. Zdroje dat, ověření klíče a 12h mezipaměť", 11.5f);
             AppendText(rtb,
+                "• Zdroj dat: V levém panelu můžete zvolit „Preferovat Meteologix API + Open-Meteo“, „Pouze Open-Meteo API“ nebo „Pouze Meteologix / Kachelmann API“ (vhodné při sdílené síti, např. v ČHMÚ, aby se předešlo limitům Open-Meteo 429).\n" +
+                "• Ověření klíče: Vedle pole X-API-Key je tlačítko „Ověřit“, které ihned otestuje platnost vašeho Meteologix API klíče.\n" +
                 "• 10 otevřených modelů (Open-Meteo API): ALADIN CZ (1 km, ČHMÚ), ECMWF IFS 0.25°, ICON-EU, ICON-D2, ICON-D2 RUC, GFS, GEM, JMA, UKMO, ARPEGE.\n" +
-                "• Volitelné Meteologix API (X-API-Key): Meteologix ECMWF, Europe Swiss 4x4, Europe Swiss Nowcast HD.\n" +
-                "• Všechny body se stahují v 1 společném požadavku a ukládají na 12 hodin do komprimované diskové cache (%AppData%\\MeteoBarbucha\\cache), aby se šetřily API limity (ochrana proti chybě 429).\n\n");
+                "• Meteologix API (X-API-Key): Meteologix ECMWF, Europe Swiss 4x4, Europe Swiss Nowcast HD.\n" +
+                "• Automaticky stahovat každých X h: Časovač pouze stahuje čerstvá data do aplikace (bez automatického ukládání na disk).\n\n");
 
             AppendHeading(rtb, "5. Automatické aktualizace a přenositelnost", 11.5f);
             AppendText(rtb,

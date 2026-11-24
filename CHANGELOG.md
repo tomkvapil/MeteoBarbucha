@@ -2,6 +2,15 @@
 
 All notable changes to **MeteoBarbucha ČR** will be documented in this file.
 
+## [1.3.2] - 2026-11-24
+### Added
+- **Data source selector (`Zdroj dat`)** allowing users to choose between `Prefer Meteologix API + Open-Meteo`, `Open-Meteo only`, or `Meteologix / Kachelmann API only` (ideal for shared networks such as ČHMÚ to avoid Open-Meteo 429 rate limits).
+- **API Key Verification button (`Ověřit`)** with live status feedback (`✓ valid` / `✗ invalid` HTTP status) for Meteologix `X-API-Key`.
+- Active data source label displayed in the status bar after each fetch.
+### Changed
+- Renamed and updated the background timer to **`Automaticky stahovat každých`** (auto-fetches fresh data into the UI without auto-saving files to disk).
+- Updated the built-in **User Guide (`HelpDialog.cs`)** for v1.3.2.
+
 ## [1.3.1] - 2026-11-23
 ### Added
 - **Emagram mode toggle** (`Emagram (rovné izotermy)`) in `ThermodiagramDialog.cs` to switch between Skew-T and straight-isotherm Emagram vertical profiles.

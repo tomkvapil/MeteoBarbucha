@@ -72,6 +72,13 @@ namespace MeteoSrazky
         PointValue
     }
 
+    public enum DataSourcePreference
+    {
+        OpenMeteoOnly,
+        PreferMeteologix,
+        MeteologixOnly
+    }
+
     public class GeoGridPoint
     {
         public double Latitude { get; set; }
@@ -93,6 +100,7 @@ namespace MeteoSrazky
         public int ForecastDays { get; set; }
         public WeatherParameter Parameter { get; set; }
         public string Unit { get; set; }
+        public string DataSourceLabel { get; set; }
         public double? WarningThreshold { get; set; }
         public string PeriodDescription { get; set; }
         public List<string> Dates { get; set; }

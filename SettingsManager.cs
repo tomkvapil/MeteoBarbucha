@@ -15,6 +15,7 @@ namespace MeteoSrazky
         public int ParamIndex { get; set; }
         public int AutoHoursIndex { get; set; }
         public string MeteologixApiKey { get; set; }
+        public int DataSourceIndex { get; set; }
         public string UpdateManifestUrl { get; set; }
         public double UtciWarningThreshold { get; set; }
 
