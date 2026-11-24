@@ -24,7 +24,7 @@ namespace MeteoSrazky
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
             var client = new HttpClient();
             client.Timeout = TimeSpan.FromSeconds(30);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("MeteoBarbuchaCZ/1.3.3");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("MeteoBarbuchaCZ/1.4.0");
             return client;
         }
 
@@ -85,7 +85,7 @@ namespace MeteoSrazky
                         if (resp2.IsSuccessStatusCode)
                             return Tuple.Create(true, "✓ Klíč je platný a předpověď je aktivní (200 OK)");
                         if ((int)resp2.StatusCode == 403)
-                            return Tuple.Create(true, "✓ Klíč platný, ale Praha není povolena (403 — načetou se povolené lokality)");
+                            return Tuple.Create(true, "✓ Klíč platný, ale Praha není povolena (403 — načtou se povolené lokality)");
                         return Tuple.Create(true, "✓ Klíč platný (předpověď: HTTP " + (int)resp2.StatusCode + ")");
                     }
                 }
@@ -106,48 +106,53 @@ namespace MeteoSrazky
             Action<string> log,
             CancellationToken ct = default(CancellationToken),
             DataSourcePreference dataSource = DataSourcePreference.AutoMultiSource,
-            string openMeteoCustomKeyOrUrl = null)
+            string openMeteoCustomKeyOrUrl = null,
+            Action<int, int, string> progress = null)
         {
             if (selectedModels == null || selectedModels.Count == 0)
-                throw new ArgumentException("Vyberte alespoň jeden meteorologický model.");
+            {
+                if (dataSource != DataSourcePreference.AlternativeOpenOnly && dataSource != DataSourcePreference.MeteologixOnly)
+                    throw new ArgumentException("Vyberte alespoň jeden meteorologický model.");
+            }
 
             if (dataSource == DataSourcePreference.MeteologixOnly && string.IsNullOrWhiteSpace(meteologixApiKey))
-                throw new ArgumentException("Pro režim 'Pouze Meteologix API' musíte zadat platný X-API-Key klíč.");
+                throw new ArgumentException("Pro režim 'Pouze Meteologix API' musíte v Nastavení zadat platný X-API-Key klíč.");
 
-            bool useHourly = startHour.HasValue && endHour.HasValue;
-            DateTime cleanStart = DateTime.MinValue;
-            DateTime cleanEnd = DateTime.MinValue;
+            bool useCustomHours = startHour.HasValue && endHour.HasValue;
+            DateTime nowLocal = DateTime.Now;
+            DateTime nowHour = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, nowLocal.Hour, 0, 0);
 
-            if (useHourly)
+            DateTime cleanStart;
+            DateTime cleanEnd;
+
+            if (useCustomHours)
             {
                 cleanStart = new DateTime(startHour.Value.Year, startHour.Value.Month, startHour.Value.Day, startHour.Value.Hour, 0, 0);
                 cleanEnd = new DateTime(endHour.Value.Year, endHour.Value.Month, endHour.Value.Day, endHour.Value.Hour, 0, 0);
                 if (cleanEnd <= cleanStart)
                     throw new ArgumentException("Konec časového úseku musí být později než začátek.");
             }
+            else
+            {
+                // Unified future forecast window [nowHour .. nowHour + forecastDays*24 - 1] so all providers compare identical hours!
+                cleanStart = nowHour;
+                cleanEnd = nowHour.AddHours(forecastDays * 24 - 1);
+            }
 
             var paramInfo = CzechData.GetParameterInfo(parameter);
             var result = new ForecastResult
             {
                 FetchedAt = DateTime.Now,
-                ForecastDays = useHourly ? Math.Max(1, (int)Math.Ceiling((cleanEnd - cleanStart).TotalDays)) : forecastDays,
+                ForecastDays = useCustomHours ? Math.Max(1, (int)Math.Ceiling((cleanEnd - cleanStart).TotalDays)) : forecastDays,
                 Parameter = parameter,
                 Unit = paramInfo.Unit,
                 Models = new List<WeatherModelInfo>(),
-                DataSourceLabel = ""
-            };
-
-            if (useHourly)
-            {
-                result.PeriodDescription = string.Format(
+                DataSourceLabel = "",
+                PeriodDescription = string.Format(
                     CultureInfo.InvariantCulture,
                     "{0:dd.MM.yyyy HH:00} – {1:dd.MM.yyyy HH:00} ({2:0} h)",
-                    cleanStart, cleanEnd, (cleanEnd - cleanStart).TotalHours);
-            }
-            else
-            {
-                result.PeriodDescription = forecastDays + " dny";
-            }
+                    cleanStart, cleanEnd.AddHours(1), (cleanEnd - cleanStart).TotalHours + 1)
+            };
 
             foreach (var r in CzechData.Regions)
                 result.RegionModelSums[r.Code] = new Dictionary<string, double?>();
@@ -155,21 +160,25 @@ namespace MeteoSrazky
             // 1) Meteologix-only mode
             if (dataSource == DataSourcePreference.MeteologixOnly)
             {
-                await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, useHourly ? (DateTime?)cleanStart : null, useHourly ? (DateTime?)cleanEnd : null, log);
+                await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, cleanStart, cleanEnd, log, progress, ct).ConfigureAwait(false);
                 if (result.Models.Count == 0)
                     throw new Exception("Meteologix API nevrátilo žádná data pro žádný z krajů ČR. Ověřte platnost API klíče a povolené lokality na accounts.meteologix.com.");
-                result.DataSourceLabel = "Meteologix API";
+                result.DataSourceLabel = "Meteologix API (14 bodů)";
+                EnsembleStats.SnapshotBaseValues(result);
                 return result;
             }
 
             var openMeteoModels = new List<WeatherModelInfo>();
             var altModels = new List<WeatherModelInfo>();
-            foreach (var m in selectedModels)
+            if (selectedModels != null)
             {
-                if (CzechData.IsOpenMeteoModel(m.Id))
-                    openMeteoModels.Add(m);
-                else if (m.Id == AlternativeWeatherProviders.MetNoId || m.Id == AlternativeWeatherProviders.BrightSkyId)
-                    altModels.Add(m);
+                foreach (var m in selectedModels)
+                {
+                    if (CzechData.IsOpenMeteoModel(m.Id))
+                        openMeteoModels.Add(m);
+                    else if (m.Id == AlternativeWeatherProviders.MetNoId || m.Id == AlternativeWeatherProviders.BrightSkyId)
+                        altModels.Add(m);
+                }
             }
 
             // 2) Alternative open sources only (MET Norway + Bright Sky — 0 Open-Meteo requests)
@@ -179,16 +188,13 @@ namespace MeteoSrazky
                     altModels = AlternativeWeatherProviders.GetDefaultAlternativeModels();
 
                 await AlternativeWeatherProviders.PopulateAlternativeModelsAsync(
-                    altModels, result, forecastDays,
-                    useHourly ? (DateTime?)cleanStart : null,
-                    useHourly ? (DateTime?)cleanEnd : null,
-                    paramInfo, log, ct);
+                    altModels, result, cleanStart, cleanEnd, paramInfo, log, progress, ct).ConfigureAwait(false);
 
                 var srcParts = new List<string> { "MET Norway + Bright Sky" };
                 if (!string.IsNullOrWhiteSpace(meteologixApiKey))
                 {
                     int before = result.Models.Count;
-                    await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, useHourly ? (DateTime?)cleanStart : null, useHourly ? (DateTime?)cleanEnd : null, log);
+                    await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, cleanStart, cleanEnd, log, progress, ct).ConfigureAwait(false);
                     if (result.Models.Count > before)
                         srcParts.Add("Meteologix API");
                 }
@@ -197,6 +203,7 @@ namespace MeteoSrazky
                     throw new Exception("Alternativní zdroje (MET Norway / Bright Sky) nevrátily žádná data.");
 
                 result.DataSourceLabel = string.Join(" + ", srcParts);
+                EnsembleStats.SnapshotBaseValues(result);
                 return result;
             }
 
@@ -206,18 +213,25 @@ namespace MeteoSrazky
             var activeSources = new List<string>();
             bool openMeteoRateLimited = false;
 
-            // 3) Open-Meteo batch fetch (trimmed to Czechia + 0.38° border buffer to save ~30% API quota!)
+            // 3) Open-Meteo batch fetch (182 points: 14 regional capitals + 168 Czechia & border points, ~22% fewer points than 234!)
             if (openMeteoModels.Count > 0)
             {
                 try
                 {
+                    if (progress != null)
+                        progress(10, 100, "Stahuji dávku Open-Meteo (" + openMeteoModels.Count + " modelů)...");
+
                     await FetchOpenMeteoBatchAsync(
-                        openMeteoModels, result, forecastDays, useHourly, cleanStart, cleanEnd,
-                        paramInfo, openMeteoCustomKeyOrUrl, log, ct);
+                        openMeteoModels, result, cleanStart, cleanEnd,
+                        paramInfo, openMeteoCustomKeyOrUrl, log, ct).ConfigureAwait(false);
                     activeSources.Add(string.IsNullOrWhiteSpace(openMeteoCustomKeyOrUrl) ? "Open-Meteo" : "Open-Meteo (vlastní)");
+
+                    if (progress != null)
+                        progress(60, 100, "Zpracována dávka Open-Meteo.");
                 }
                 catch (HttpRateLimitException ex429)
                 {
+                    AppLogger.Warn("Open-Meteo HTTP 429: " + ex429.Message);
                     if (dataSource == DataSourcePreference.OpenMeteoOnly)
                         throw new Exception(ex429.Message);
 
@@ -233,10 +247,7 @@ namespace MeteoSrazky
             {
                 int beforeAlt = result.Models.Count;
                 await AlternativeWeatherProviders.PopulateAlternativeModelsAsync(
-                    altModels, result, forecastDays,
-                    useHourly ? (DateTime?)cleanStart : null,
-                    useHourly ? (DateTime?)cleanEnd : null,
-                    paramInfo, log, ct);
+                    altModels, result, cleanStart, cleanEnd, paramInfo, log, progress, ct).ConfigureAwait(false);
                 if (result.Models.Count > beforeAlt)
                     activeSources.Add(openMeteoRateLimited ? "Záloha: MET Norway + Bright Sky" : "MET Norway / Bright Sky");
             }
@@ -245,7 +256,7 @@ namespace MeteoSrazky
             if (dataSource != DataSourcePreference.OpenMeteoOnly && !string.IsNullOrWhiteSpace(meteologixApiKey))
             {
                 int beforeMlx = result.Models.Count;
-                await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, useHourly ? (DateTime?)cleanStart : null, useHourly ? (DateTime?)cleanEnd : null, log);
+                await TryFetchMeteologixApiAsync(meteologixApiKey.Trim(), result, paramInfo, cleanStart, cleanEnd, log, progress, ct).ConfigureAwait(false);
                 if (result.Models.Count > beforeMlx)
                     activeSources.Add("Meteologix API");
             }
@@ -254,14 +265,13 @@ namespace MeteoSrazky
                 throw new Exception("Žádný ze zvolených zdrojů dat nevrátil platná data.");
 
             result.DataSourceLabel = activeSources.Count > 0 ? string.Join(" + ", activeSources) : "Open-Meteo API";
+            EnsembleStats.SnapshotBaseValues(result);
             return result;
         }
 
         private async Task FetchOpenMeteoBatchAsync(
             List<WeatherModelInfo> openMeteoModels,
             ForecastResult result,
-            int forecastDays,
-            bool useHourly,
             DateTime cleanStart,
             DateTime cleanEnd,
             WeatherParameterInfo paramInfo,
@@ -277,7 +287,6 @@ namespace MeteoSrazky
                 lonList.Add(r.Longitude.ToString("0.0000", CultureInfo.InvariantCulture));
             }
 
-            // Keep 100% 0.25° x 0.35° resolution inside Czechia and 0.38° border buffer while skipping deep foreign points
             var gridPts = new List<GeoGridPoint>();
             for (double lat = 48.55; lat <= 51.06; lat += 0.25)
             {
@@ -303,55 +312,21 @@ namespace MeteoSrazky
             foreach (var m in openMeteoModels)
                 modelIds.Add(m.Id);
 
-            string queryParams;
-            string sectionKey;
-            string varPrefix;
+            string sParam = cleanStart.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
+            string eParam = cleanEnd.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
+            string varPrefix = paramInfo.HourlyVar;
+            string sectionKey = "hourly";
 
-            if (useHourly)
-            {
-                string sParam = cleanStart.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
-                string eParam = cleanEnd.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
-                varPrefix = paramInfo.HourlyVar;
-                queryParams = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "latitude={0}&longitude={1}&hourly={2}&models={3}&timezone=Europe%2FPrague&start_hour={4}&end_hour={5}",
-                    string.Join(",", latList),
-                    string.Join(",", lonList),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    Uri.EscapeDataString(sParam),
-                    Uri.EscapeDataString(eParam)
-                );
-                sectionKey = "hourly";
-            }
-            else if (paramInfo.ForceHourly)
-            {
-                varPrefix = paramInfo.HourlyVar;
-                queryParams = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "latitude={0}&longitude={1}&hourly={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
-                    string.Join(",", latList),
-                    string.Join(",", lonList),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    forecastDays
-                );
-                sectionKey = "hourly";
-            }
-            else
-            {
-                varPrefix = paramInfo.DailyVar;
-                queryParams = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "latitude={0}&longitude={1}&daily={2}&models={3}&timezone=Europe%2FPrague&forecast_days={4}",
-                    string.Join(",", latList),
-                    string.Join(",", lonList),
-                    varPrefix,
-                    string.Join(",", modelIds),
-                    forecastDays
-                );
-                sectionKey = "daily";
-            }
+            string queryParams = string.Format(
+                CultureInfo.InvariantCulture,
+                "latitude={0}&longitude={1}&hourly={2}&models={3}&timezone=Europe%2FPrague&start_hour={4}&end_hour={5}",
+                string.Join(",", latList),
+                string.Join(",", lonList),
+                varPrefix,
+                string.Join(",", modelIds),
+                Uri.EscapeDataString(sParam),
+                Uri.EscapeDataString(eParam)
+            );
 
             string url = BuildOpenMeteoForecastUrl(queryParams, openMeteoCustomKeyOrUrl);
 
@@ -363,8 +338,34 @@ namespace MeteoSrazky
             else
             {
                 log("Stahuji Open-Meteo — " + paramInfo.DisplayName + " (" + latList.Count + " bodů ČR × " + openMeteoModels.Count + " modelů v 1 požadavku)...");
-                json = await GetStringWithRetryAsync(url, ct, log);
-                DiskCache.Put(url, json);
+                try
+                {
+                    json = await GetStringWithRetryAsync(url, ct, log).ConfigureAwait(false);
+                    DiskCache.Put(url, json);
+                }
+                catch (Exception netEx)
+                {
+                    if (ct.IsCancellationRequested || netEx is HttpRateLimitException)
+                        throw;
+
+                    // Offline fallback from expired disk cache if available
+                    DateTime staleAt;
+                    string staleJson = DiskCache.TryGetStale(url, out staleAt);
+                    if (!string.IsNullOrEmpty(staleJson))
+                    {
+                        json = staleJson;
+                        result.IsOfflineFallback = true;
+                        result.OfflineCachedAt = staleAt;
+                        string warnMsg = "⚠ Síť nedostupná (" + netEx.Message + ") — zobrazena OFFLINE záloha z mezipaměti ze dne " + staleAt.ToString("dd.MM.yyyy HH:mm") + ".";
+                        log(warnMsg);
+                        AppLogger.Warn(warnMsg);
+                    }
+                    else
+                    {
+                        AppLogger.Error("Chyba Open-Meteo: " + netEx.Message);
+                        throw;
+                    }
+                }
             }
 
             var serializer = new JavaScriptSerializer();
@@ -433,16 +434,7 @@ namespace MeteoSrazky
             }
             result.GridPoints = gridPts;
 
-            if (!useHourly && result.Dates.Count > 0)
-            {
-                string firstDate = result.Dates[0];
-                string lastDate = result.Dates[result.Dates.Count - 1];
-                if (firstDate.Length > 10) firstDate = firstDate.Substring(0, 10);
-                if (lastDate.Length > 10) lastDate = lastDate.Substring(0, 10);
-                result.PeriodDescription = firstDate + " až " + lastDate + " (" + forecastDays + " dny)";
-            }
-
-            await FetchModelRunTimesAsync(openMeteoModels, result, ct);
+            await FetchModelRunTimesAsync(openMeteoModels, result, log, ct).ConfigureAwait(false);
             log("Open-Meteo data zpracována (" + gridPts.Count + " bodů sítě ČR + příhraničí).");
         }
 
@@ -466,6 +458,8 @@ namespace MeteoSrazky
                 return result.RegionModelSums;
 
             var table = new Dictionary<string, Dictionary<string, double?>>();
+            bool belowWarn = EnsembleStats.IsBelowThresholdWarning(result.Parameter);
+
             foreach (var r in CzechData.Regions)
             {
                 table[r.Code] = new Dictionary<string, double?>();
@@ -473,6 +467,7 @@ namespace MeteoSrazky
                 {
                     double sum = 0;
                     double max = double.MinValue;
+                    double min = double.MaxValue;
                     int cnt = 0;
 
                     foreach (var gp in result.GridPoints)
@@ -483,12 +478,16 @@ namespace MeteoSrazky
                         {
                             sum += v.Value;
                             if (v.Value > max) max = v.Value;
+                            if (v.Value < min) min = v.Value;
                             cnt++;
                         }
                     }
 
                     if (cnt > 0)
-                        table[r.Code][m.Id] = Math.Round(mode == RegionAggregationMode.RegionMax ? max : (sum / cnt), 2);
+                    {
+                        double extremum = belowWarn ? min : max;
+                        table[r.Code][m.Id] = Math.Round(mode == RegionAggregationMode.RegionMax ? extremum : (sum / cnt), 2);
+                    }
                     else if (result.SelectedTimeStepIndex < 0)
                     {
                         double? fallback;
@@ -645,7 +644,7 @@ namespace MeteoSrazky
         {
             for (int attempt = 0; attempt < 2; attempt++)
             {
-                using (var resp = await _httpClient.GetAsync(url, ct))
+                using (var resp = await _httpClient.GetAsync(url, ct).ConfigureAwait(false))
                 {
                     if ((int)resp.StatusCode == 429)
                     {
@@ -655,23 +654,24 @@ namespace MeteoSrazky
                             if (resp.Headers.RetryAfter != null && resp.Headers.RetryAfter.Delta.HasValue)
                                 waitSec = Math.Max(1, Math.Min(12, (int)resp.Headers.RetryAfter.Delta.Value.TotalSeconds));
                             log("Open-Meteo API vrátilo 429 (Too Many Requests). Čekám " + waitSec + " s a opakuji pokus...");
-                            await Task.Delay(waitSec * 1000, ct);
+                            await Task.Delay(waitSec * 1000, ct).ConfigureAwait(false);
                             continue;
                         }
-                        throw new HttpRateLimitException("Překročen limit bezplatného Open-Meteo API (429 Too Many Requests). Zkuste režim 'Alternativní zdroje (MET Norway + Bright Sky)' nebo zadejte vlastní klíč.");
+                        throw new HttpRateLimitException("Překročen limit bezplatného Open-Meteo API (429 Too Many Requests). Zkuste v Nastavení režim 'Alternativní zdroje (MET Norway + Bright Sky)' nebo vlastní klíč.");
                     }
                     resp.EnsureSuccessStatusCode();
-                    return await resp.Content.ReadAsStringAsync();
+                    return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 }
             }
             throw new HttpRateLimitException("Překročen limit bezplatného Open-Meteo API (429).");
         }
 
-        private static async Task FetchModelRunTimesAsync(List<WeatherModelInfo> models, ForecastResult result, CancellationToken ct)
+        private static async Task FetchModelRunTimesAsync(List<WeatherModelInfo> models, ForecastResult result, Action<string> log, CancellationToken ct)
         {
             var tasks = new List<Task>();
             var lockObj = new object();
             TimeSpan metaTtl = TimeSpan.FromMinutes(30);
+            var staleWarnings = new List<string>();
 
             foreach (var m in models)
             {
@@ -684,7 +684,7 @@ namespace MeteoSrazky
                         string metaJson = DiskCache.TryGet(metaUrl, metaTtl);
                         if (string.IsNullOrEmpty(metaJson))
                         {
-                            metaJson = await _httpClient.GetStringAsync(metaUrl);
+                            metaJson = await _httpClient.GetStringAsync(metaUrl).ConfigureAwait(false);
                             if (!string.IsNullOrEmpty(metaJson))
                                 DiskCache.Put(metaUrl, metaJson);
                         }
@@ -697,31 +697,50 @@ namespace MeteoSrazky
                             DateTime utcRun = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(unixSec);
                             DateTime localRun = utcRun.ToLocalTime();
                             string formatted = string.Format(CultureInfo.InvariantCulture, "{0:dd.MM.yyyy HH:mm} ({1:HH}Z)", localRun, utcRun);
+                            double ageH = (DateTime.UtcNow - utcRun).TotalHours;
+
                             lock (lockObj)
                             {
                                 result.ModelRunTimes[model.Id] = formatted;
+                                result.ModelRunUtcTimes[model.Id] = utcRun;
+                                if (ageH > 12.0)
+                                    staleWarnings.Add(model.DisplayName + " (" + Math.Round(ageH, 1).ToString(CultureInfo.InvariantCulture) + " h starý běh)");
                             }
                         }
                     }
                     catch
                     {
-                        // Non-critical metadata lookup
                     }
                 }, ct));
             }
 
             try
             {
-                await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks).ConfigureAwait(false);
             }
             catch
             {
             }
+
+            if (staleWarnings.Count > 0)
+            {
+                string msg = "⚠ Upozornění na starší běh modelu (>12 h): " + string.Join(", ", staleWarnings);
+                log(msg);
+                AppLogger.Warn(msg);
+            }
         }
 
-        private async Task TryFetchMeteologixApiAsync(string apiKey, ForecastResult result, WeatherParameterInfo paramInfo, DateTime? startHour, DateTime? endHour, Action<string> log)
+        private async Task TryFetchMeteologixApiAsync(
+            string apiKey,
+            ForecastResult result,
+            WeatherParameterInfo paramInfo,
+            DateTime startHour,
+            DateTime endHour,
+            Action<string> log,
+            Action<int, int, string> progress,
+            CancellationToken ct)
         {
-            log("Dotazuji Meteologix / Kachelmannwetter API v02...");
+            log("Dotazuji Meteologix / Kachelmannwetter API v02 (14 krajských bodů)...");
             var kachelmannModels = new[]
             {
                 new { EndpointPath = "advanced/1h", Info = new WeatherModelInfo { Id = "meteologix_advanced", DisplayName = "Meteologix Advanced (API)", Provider = "Kachelmannwetter" } },
@@ -732,12 +751,19 @@ namespace MeteoSrazky
             {
                 foreach (var km in kachelmannModels)
                 {
+                    ct.ThrowIfCancellationRequested();
                     var sumsByRegion = new Dictionary<string, double?>();
                     int successCount = 0;
                     int forbiddenCount = 0;
+                    int idx = 0;
 
                     foreach (var region in CzechData.Regions)
                     {
+                        ct.ThrowIfCancellationRequested();
+                        idx++;
+                        if (progress != null)
+                            progress(idx, CzechData.Regions.Count, "Stahuji " + km.Info.DisplayName + ": " + idx + " / 14 krajů...");
+
                         string endpoint = string.Format(
                             CultureInfo.InvariantCulture,
                             "https://api.kachelmannwetter.com/v02/forecast/{0:0.0000}/{1:0.0000}/{2}",
@@ -754,18 +780,18 @@ namespace MeteoSrazky
                             using (var req = new HttpRequestMessage(HttpMethod.Get, endpoint))
                             {
                                 req.Headers.Add("X-API-Key", apiKey);
-                                using (var resp = await _httpClient.SendAsync(req))
+                                using (var resp = await _httpClient.SendAsync(req, ct).ConfigureAwait(false))
                                 {
                                     if (!resp.IsSuccessStatusCode)
                                     {
                                         if ((int)resp.StatusCode == 401)
                                         {
                                             log("Meteologix API vrátilo 401 Unauthorized. Zkontrolujte platnost X-API-Key klíče.");
+                                            AppLogger.Warn("Meteologix API 401 Unauthorized.");
                                             return;
                                         }
                                         if ((int)resp.StatusCode == 403)
                                         {
-                                            // Hobby keys allow only whitelisted coordinates -> skip non-whitelisted region instead of aborting!
                                             forbiddenCount++;
                                             sumsByRegion[region.Code] = null;
                                             continue;
@@ -774,14 +800,14 @@ namespace MeteoSrazky
                                         continue;
                                     }
 
-                                    body = await resp.Content.ReadAsStringAsync();
+                                    body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                                     if (!string.IsNullOrEmpty(body))
                                         DiskCache.Put(cacheKey, body);
                                 }
                             }
                         }
 
-                        double? val = ParseKachelmannParameterValue(body, paramInfo, result.ForecastDays, startHour, endHour);
+                        double? val = ParseKachelmannParameterValue(body, paramInfo, startHour, endHour);
                         sumsByRegion[region.Code] = val;
                         if (val.HasValue)
                             successCount++;
@@ -795,6 +821,10 @@ namespace MeteoSrazky
                     if (successCount > 0)
                     {
                         result.Models.Add(km.Info);
+                        result.ModelNotes[km.Info.Id] = successCount < 14
+                            ? "pouze " + successCount + "/14 povolených krajských bodů"
+                            : "pouze 14 krajských bodů (bez sítě)";
+
                         foreach (var region in CzechData.Regions)
                         {
                             double? val;
@@ -806,13 +836,18 @@ namespace MeteoSrazky
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 log("Chyba při komunikaci s Meteologix API: " + ex.Message);
+                AppLogger.Warn("Chyba Meteologix API: " + ex.Message);
             }
         }
 
-        private double? ParseKachelmannParameterValue(string json, WeatherParameterInfo paramInfo, int forecastDays, DateTime? startHour, DateTime? endHour)
+        private double? ParseKachelmannParameterValue(string json, WeatherParameterInfo paramInfo, DateTime startHour, DateTime endHour)
         {
             if (string.IsNullOrEmpty(json))
                 return null;
@@ -826,7 +861,6 @@ namespace MeteoSrazky
             if (dataArr == null)
                 return null;
 
-            DateTime cutoff = DateTime.UtcNow.AddDays(forecastDays);
             double sum = 0;
             double max = double.MinValue;
             double min = double.MaxValue;
@@ -843,16 +877,9 @@ namespace MeteoSrazky
                     DateTime dt;
                     if (DateTime.TryParse(Convert.ToString(entry["dateTime"], CultureInfo.InvariantCulture), out dt))
                     {
-                        if (startHour.HasValue && endHour.HasValue)
-                        {
-                            DateTime localDt = dt.ToLocalTime();
-                            if (localDt < startHour.Value || localDt > endHour.Value)
-                                continue;
-                        }
-                        else if (dt.ToUniversalTime() > cutoff)
-                        {
+                        DateTime localDt = dt.ToLocalTime();
+                        if (localDt < startHour || localDt > endHour)
                             continue;
-                        }
                     }
                 }
 
@@ -887,6 +914,8 @@ namespace MeteoSrazky
                 case WeatherParameter.Temperature2mMax:
                 case WeatherParameter.Temperature2mMin:
                     return TryReadAny(entry, "temp", "temperature", "tempMax", "tempMin");
+                case WeatherParameter.DewPoint2m:
+                    return TryReadAny(entry, "dewPoint", "dewpoint");
                 case WeatherParameter.CloudCover:
                     return TryReadAny(entry, "cloudCover", "clouds", "cloudiness");
                 case WeatherParameter.WindSpeed10m:

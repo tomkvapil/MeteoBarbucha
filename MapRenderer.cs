@@ -51,8 +51,8 @@ namespace MeteoSrazky
         private static int _cachedGridCount = -1;
         private static int _cachedGridHash = 0;
         private static byte[] _cachedMask;
-        private static int[] _cachedIdx;     // 4 indices per pixel
-        private static float[] _cachedWeights; // 4 weights per pixel
+        private static int[] _cachedIdx;
+        private static float[] _cachedWeights;
         private static int _cacheStartX, _cacheEndX, _cacheStartY, _cacheEndY;
 
         private static int ComputeGridHash(List<GeoGridPoint> gridPoints)
@@ -116,7 +116,6 @@ namespace MeteoSrazky
                             int pIdx = pixRow + x;
                             mask[pIdx] = 1;
 
-                            // Find 4 nearest grid points for smooth local IDW interpolation
                             double d0 = double.MaxValue, d1 = double.MaxValue, d2 = double.MaxValue, d3 = double.MaxValue;
                             int i0 = 0, i1 = 0, i2 = 0, i3 = 0;
                             double px = x + 0.5, py = y + 0.5;
@@ -201,6 +200,23 @@ namespace MeteoSrazky
             return true;
         }
 
+        public static Color GetIdealTextColor(Color bg)
+        {
+            double lum = 0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B;
+            return lum < 140.0 ? Color.White : Color.FromArgb(15, 23, 42);
+        }
+
+        public static Color GetAgreementColor(double pct)
+        {
+            if (pct <= 0.1) return Color.FromArgb(241, 245, 249);
+            if (pct < 20.0) return Color.FromArgb(219, 234, 254);
+            if (pct < 40.0) return Color.FromArgb(125, 211, 252);
+            if (pct < 60.0) return Color.FromArgb(253, 224, 71);
+            if (pct < 80.0) return Color.FromArgb(251, 146, 60);
+            if (pct < 95.0) return Color.FromArgb(239, 68, 68);
+            return Color.FromArgb(153, 27, 27);
+        }
+
         public static Bitmap RenderMapBitmap(
             string modelKey,
             string modelDisplayName,
@@ -211,8 +227,15 @@ namespace MeteoSrazky
             int height = MapHeight;
             var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             var paramInfo = CzechData.GetParameterInfo(result.Parameter);
-            string unit = string.IsNullOrEmpty(result.Unit) ? paramInfo.Unit : result.Unit;
+            bool isAgreementMap = (modelKey == EnsembleStats.KeyAgreement);
+            bool isRegionalOnlyModel = !string.IsNullOrEmpty(modelKey) && modelKey.StartsWith("meteologix_", StringComparison.OrdinalIgnoreCase);
+
+            string unit = isAgreementMap ? "%" : (string.IsNullOrEmpty(result.Unit) ? paramInfo.Unit : result.Unit);
             string paramTitle = paramInfo.MapTitle;
+            if (result.RollingWindowHours > 0 && result.SelectedTimeStepIndex < 0)
+            {
+                paramTitle = paramTitle + " (Max " + result.RollingWindowHours + "h okno)";
+            }
 
             using (var g = Graphics.FromImage(bmp))
             {
@@ -226,12 +249,14 @@ namespace MeteoSrazky
                     g.FillRectangle(headerBrush, 0, 0, width, 78);
                 }
 
-                using (var titleFont = new Font("Segoe UI", 19f, FontStyle.Bold))
-                using (var subFont = new Font("Segoe UI", 10.5f, FontStyle.Regular))
+                using (var titleFont = new Font("Segoe UI", 17.5f, FontStyle.Bold))
+                using (var subFont = new Font("Segoe UI", 10f, FontStyle.Regular))
+                using (var badgeFont = new Font("Segoe UI", 9.5f, FontStyle.Bold))
                 using (var whiteBrush = new SolidBrush(Color.White))
                 using (var mutedBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
                 {
-                    g.DrawString(paramTitle + " — " + modelDisplayName, titleFont, whiteBrush, 24, 14);
+                    g.DrawString(paramTitle + " — " + modelDisplayName, titleFont, whiteBrush, 24, 13);
+
                     string dateSpan;
                     if (result.SelectedTimeStepIndex >= 0 && result.TimeSteps != null && result.SelectedTimeStepIndex < result.TimeSteps.Count)
                     {
@@ -241,17 +266,16 @@ namespace MeteoSrazky
                     {
                         dateSpan = !string.IsNullOrEmpty(result.PeriodDescription)
                             ? result.PeriodDescription
-                            : (result.Dates.Count > 0
-                                ? result.Dates[0] + " až " + result.Dates[result.Dates.Count - 1] + " (" + result.ForecastDays + " dny)"
-                                : result.ForecastDays + " dní");
+                            : result.ForecastDays + " dny";
                     }
+
                     string runInfo = "";
                     if (!string.IsNullOrEmpty(modelKey) && result.ModelRunTimes != null)
                     {
                         string rt;
                         if (result.ModelRunTimes.TryGetValue(modelKey, out rt) && !string.IsNullOrEmpty(rt))
-                            runInfo = "   |   Běh modelu: " + rt;
-                        else if (modelKey == "prumer_modelu" || modelKey == "max_modelu" || modelKey == "rozptyl_modelu")
+                            runInfo = "   |   Běh: " + rt;
+                        else if (EnsembleStats.IsSummaryMapKey(modelKey))
                         {
                             foreach (var m in result.Models)
                             {
@@ -264,8 +288,37 @@ namespace MeteoSrazky
                         }
                     }
 
-                    string subtitle = "Období: " + dateSpan + runInfo + "   |   Vygenerováno: " + result.FetchedAt.ToString("dd.MM.yyyy HH:mm");
+                    string notePart = "";
+                    if (!string.IsNullOrEmpty(modelKey) && result.ModelNotes != null && result.ModelNotes.ContainsKey(modelKey))
+                    {
+                        notePart = "   |   Pozn.: " + result.ModelNotes[modelKey];
+                    }
+
+                    string subtitle = "Období: " + dateSpan + runInfo + notePart + "   |   Vygenerováno: " + result.FetchedAt.ToString("dd.MM.yyyy HH:mm");
                     g.DrawString(subtitle, subFont, mutedBrush, 26, 48);
+
+                    // Right-aligned warning pills in header (Offline fallback or Stale run > 12h)
+                    string warnBanner = null;
+                    if (result.IsOfflineFallback)
+                    {
+                        warnBanner = "⚠ OFFLINE ZÁLOHA (" + result.OfflineCachedAt.ToString("dd.MM. HH:mm") + ")";
+                    }
+                    else if (!string.IsNullOrEmpty(modelKey) && EnsembleStats.IsModelRunStale(result, modelKey))
+                    {
+                        double? age = EnsembleStats.GetModelRunAgeHours(result, modelKey);
+                        warnBanner = "⚠ STARŠÍ BĚH (" + Math.Round(age ?? 13.0, 0).ToString(CultureInfo.InvariantCulture) + " h)";
+                    }
+
+                    if (!string.IsNullOrEmpty(warnBanner))
+                    {
+                        SizeF bsz = g.MeasureString(warnBanner, badgeFont);
+                        RectangleF bRect = new RectangleF(width - bsz.Width - 36, 15, bsz.Width + 16, bsz.Height + 6);
+                        using (var bBg = new SolidBrush(Color.FromArgb(217, 119, 6)))
+                        {
+                            g.FillRectangle(bBg, bRect);
+                            g.DrawString(warnBanner, badgeFont, whiteBrush, bRect.X + 8, bRect.Y + 3);
+                        }
+                    }
                 }
 
                 // Map area rectangle
@@ -279,11 +332,9 @@ namespace MeteoSrazky
 
                 Rectangle projRect = FitProjectionRect(mapRect, 24);
 
-                // Build combined Czechia Kraje path for clipping & region outlines
                 using (var krajePath = BuildPathFromRings(CzechGeoData.KrajePolygons, projRect))
                 using (var orpPath = BuildPathFromRings(CzechGeoData.OrpPolygons, projRect))
                 {
-                    var validPts = new List<Tuple<PointF, double>>();
                     double sumAll = 0;
                     int countAll = 0;
                     double minVal = double.MaxValue;
@@ -295,8 +346,6 @@ namespace MeteoSrazky
                         valuesByRegion.TryGetValue(r.Code, out val);
                         if (val.HasValue)
                         {
-                            PointF p = Project(r.Latitude, r.Longitude, projRect);
-                            validPts.Add(Tuple.Create(p, val.Value));
                             sumAll += val.Value;
                             countAll++;
                             if (val.Value < minVal) minVal = val.Value;
@@ -304,38 +353,32 @@ namespace MeteoSrazky
                         }
                     }
 
-                    // Collect spatial grid values (ordered 1:1 with result.GridPoints for fast cache lookup)
-                    bool canUseGridCache = !string.IsNullOrEmpty(modelKey) && result.GridPoints != null && result.GridPoints.Count > 20;
+                    bool canUseGridCache = !isRegionalOnlyModel &&
+                                           !string.IsNullOrEmpty(modelKey) &&
+                                           result.GridPoints != null &&
+                                           result.GridPoints.Count > 20;
                     double?[] gridVals = canUseGridCache ? new double?[result.GridPoints.Count] : null;
                     int validGridCount = 0;
 
                     if (canUseGridCache)
                     {
+                        var tempList = new List<double>(result.Models.Count);
                         for (int gi = 0; gi < result.GridPoints.Count; gi++)
                         {
                             var gp = result.GridPoints[gi];
                             double? gVal = null;
-                            if (modelKey == "prumer_modelu" || modelKey == "max_modelu" || modelKey == "rozptyl_modelu")
+                            if (EnsembleStats.IsSummaryMapKey(modelKey))
                             {
-                                double gSum = 0, gMin = double.MaxValue, gMax = double.MinValue;
-                                int gCnt = 0;
+                                tempList.Clear();
                                 foreach (var m in result.Models)
                                 {
                                     double? mv = WeatherService.GetGridPointValue(gp, m.Id, result.SelectedTimeStepIndex);
                                     if (mv.HasValue)
-                                    {
-                                        gSum += mv.Value;
-                                        if (mv.Value < gMin) gMin = mv.Value;
-                                        if (mv.Value > gMax) gMax = mv.Value;
-                                        gCnt++;
-                                    }
+                                        tempList.Add(mv.Value);
                                 }
-                                if (gCnt > 0)
-                                {
-                                    if (modelKey == "prumer_modelu") gVal = gSum / gCnt;
-                                    else if (modelKey == "max_modelu") gVal = gMax;
-                                    else gVal = gMax - gMin;
-                                }
+                                int hits, tot;
+                                gVal = EnsembleStats.ComputeSummaryFromValues(
+                                    tempList, modelKey, result.EffectiveAgreementThreshold, result.Parameter, out hits, out tot);
                             }
                             else
                             {
@@ -352,7 +395,7 @@ namespace MeteoSrazky
                     {
                         g.Flush();
                         EnsureGridCache(result.GridPoints, projRect, krajePath);
-                        bool categorical = result.Parameter == WeatherParameter.SignificantWeather;
+                        bool categorical = (!isAgreementMap && result.Parameter == WeatherParameter.SignificantWeather);
 
                         BitmapData bmpData = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
                         int totalBytes = Math.Abs(bmpData.Stride) * height;
@@ -410,11 +453,18 @@ namespace MeteoSrazky
                                         }
                                     }
                                     warnVal = wSum > 0 ? (sum / wSum) : 0.0;
-                                    c = GetValueColor(warnVal, result.Parameter);
+                                    c = isAgreementMap
+                                        ? GetAgreementColor(warnVal)
+                                        : GetValueColor(warnVal, result.Parameter);
                                 }
 
-                                if (result.WarningThreshold.HasValue && warnVal >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
+                                if (!isAgreementMap &&
+                                    result.WarningThreshold.HasValue &&
+                                    EnsembleStats.ExceedsThreshold(warnVal, result.WarningThreshold.Value, result.Parameter) &&
+                                    ((x + y) % 7 < 2))
+                                {
                                     c = Color.FromArgb(220, 38, 38);
+                                }
 
                                 int idx = rowOff + x * 4;
                                 pixels[idx] = c.B;
@@ -427,57 +477,40 @@ namespace MeteoSrazky
                         Marshal.Copy(pixels, 0, bmpData.Scan0, totalBytes);
                         bmp.UnlockBits(bmpData);
                     }
-                    else if (validPts.Count > 0)
+                    else if (countAll > 0)
                     {
-                        g.Flush();
-                        RectangleF bounds = krajePath.GetBounds();
-                        int startX = Math.Max(0, (int)Math.Floor(bounds.Left));
-                        int endX = Math.Min(width - 1, (int)Math.Ceiling(bounds.Right));
-                        int startY = Math.Max(0, (int)Math.Floor(bounds.Top));
-                        int endY = Math.Min(height - 1, (int)Math.Ceiling(bounds.Bottom));
-
-                        using (var maskBmp = new Bitmap(width, height, PixelFormat.Format32bppArgb))
-                        using (var mg = Graphics.FromImage(maskBmp))
+                        // Honest discrete Kraje polygon rendering when only 14 regional points exist (e.g. Meteologix API)
+                        for (int ri = 0; ri < CzechGeoData.KrajePolygons.Length; ri++)
                         {
-                            mg.Clear(Color.Black);
-                            mg.FillPath(Brushes.White, krajePath);
-                            mg.Flush();
+                            float[] ring = CzechGeoData.KrajePolygons[ri];
+                            int n = ring.Length / 2;
+                            if (n < 3) continue;
 
-                            Rectangle lockRect = new Rectangle(0, 0, width, height);
-                            BitmapData bmpData = bmp.LockBits(lockRect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-                            BitmapData maskData = maskBmp.LockBits(lockRect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-
-                            int totalBytes = Math.Abs(bmpData.Stride) * height;
-                            byte[] pixels = new byte[totalBytes];
-                            byte[] maskPixels = new byte[totalBytes];
-                            Marshal.Copy(bmpData.Scan0, pixels, 0, totalBytes);
-                            Marshal.Copy(maskData.Scan0, maskPixels, 0, totalBytes);
-
-                            int stride = bmpData.Stride;
-                            for (int y = startY; y <= endY; y++)
+                            PointF[] polyPts = new PointF[n];
+                            double sumLon = 0, sumLat = 0;
+                            for (int k = 0; k < n; k++)
                             {
-                                int rowOff = y * stride;
-                                for (int x = startX; x <= endX; x++)
-                                {
-                                    int idx = rowOff + x * 4;
-                                    if (maskPixels[idx] > 128)
-                                    {
-                                        double val = InterpolateIdw(x + 0.5, y + 0.5, validPts);
-                                        Color c = GetValueColor(val, result.Parameter);
-                                        if (result.WarningThreshold.HasValue && val >= result.WarningThreshold.Value && ((x + y) % 7 < 2))
-                                            c = Color.FromArgb(220, 38, 38);
-
-                                        pixels[idx] = c.B;
-                                        pixels[idx + 1] = c.G;
-                                        pixels[idx + 2] = c.R;
-                                        pixels[idx + 3] = 255;
-                                    }
-                                }
+                                sumLon += ring[k * 2];
+                                sumLat += ring[k * 2 + 1];
+                                polyPts[k] = Project(ring[k * 2 + 1], ring[k * 2], projRect);
                             }
 
-                            Marshal.Copy(pixels, 0, bmpData.Scan0, totalBytes);
-                            maskBmp.UnlockBits(maskData);
-                            bmp.UnlockBits(bmpData);
+                            string regCode = CzechData.FindRegionCode(sumLat / n, sumLon / n);
+                            // Special check for Prague (polygon 0) inside Central Bohemia
+                            if (ri == 0) regCode = "PHA";
+
+                            double? rVal = null;
+                            if (!string.IsNullOrEmpty(regCode))
+                                valuesByRegion.TryGetValue(regCode, out rVal);
+
+                            Color fillCol = rVal.HasValue
+                                ? (isAgreementMap ? GetAgreementColor(rVal.Value) : GetValueColor(rVal.Value, result.Parameter))
+                                : Color.FromArgb(226, 232, 240);
+
+                            using (var regBrush = new SolidBrush(fillCol))
+                            {
+                                g.FillPolygon(regBrush, polyPts);
+                            }
                         }
                     }
                     else
@@ -488,7 +521,7 @@ namespace MeteoSrazky
                         }
                     }
 
-                    // 2. Light-gray ORP (Obce s rozšířenou působností) underlay boundaries
+                    // 2. Light-gray ORP underlay boundaries
                     using (var orpPen = new Pen(Color.FromArgb(135, 148, 163, 184), 0.85f))
                     {
                         orpPen.LineJoin = LineJoin.Round;
@@ -516,7 +549,6 @@ namespace MeteoSrazky
                             PointF p = Project(r.Latitude, r.Longitude, projRect);
                             float offsetY = r.Code == "STC" ? 18f : -27f;
 
-                            // Draw regional capital city marker & name below the dot
                             if (!string.IsNullOrEmpty(r.CapitalCity))
                             {
                                 g.FillEllipse(cityBrush, p.X - 4f, p.Y - 4f, 8f, 8f);
@@ -527,15 +559,19 @@ namespace MeteoSrazky
 
                             double? val;
                             valuesByRegion.TryGetValue(r.Code, out val);
-                            bool isWarn = result.WarningThreshold.HasValue &&
+                            bool isWarn = !isAgreementMap &&
+                                          result.WarningThreshold.HasValue &&
                                           val.HasValue &&
-                                          val.Value >= result.WarningThreshold.Value;
+                                          EnsembleStats.ExceedsThreshold(val.Value, result.WarningThreshold.Value, result.Parameter);
 
                             string valStr = !val.HasValue
                                 ? "N/A"
-                                : (result.Parameter == WeatherParameter.SignificantWeather
-                                    ? CzechData.GetWmoShortLabel(val.Value)
-                                    : val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + unit);
+                                : (isAgreementMap
+                                    ? val.Value.ToString("0", CultureInfo.InvariantCulture) + " %"
+                                    : (result.Parameter == WeatherParameter.SignificantWeather
+                                        ? CzechData.GetWmoShortLabel(val.Value)
+                                        : val.Value.ToString("0.0", CultureInfo.InvariantCulture) + " " + unit));
+
                             string label = (isWarn ? "⚠ " : "") + r.Code + ": " + valStr;
                             SizeF sz = g.MeasureString(label, valFont);
 
@@ -558,13 +594,13 @@ namespace MeteoSrazky
                         }
                     }
 
-                    DrawLegendAndSummary(g, width, height, result.Parameter, paramInfo.LegendTitle, unit,
+                    DrawLegendAndSummary(g, width, height, result, isAgreementMap, paramInfo.LegendTitle, unit,
                         countAll > 0 ? (double?)(sumAll / countAll) : null,
                         countAll > 0 ? (double?)minVal : null,
                         countAll > 0 ? (double?)maxVal : null);
 
                     // Draw prominent red crossed circle if this model has no data for the selected parameter
-                    if (validGridCount == 0 && validPts.Count == 0)
+                    if (validGridCount == 0 && countAll == 0)
                     {
                         float cx = mapRect.Left + mapRect.Width / 2f;
                         float cy = mapRect.Top + mapRect.Height / 2f;
@@ -610,16 +646,55 @@ namespace MeteoSrazky
             return path;
         }
 
-        private static void DrawLegendAndSummary(Graphics g, int width, int height, WeatherParameter param, string legendTitle, string unit, double? avg, double? min, double? max)
+        private static void DrawLegendAndSummary(
+            Graphics g,
+            int width,
+            int height,
+            ForecastResult result,
+            bool isAgreementMap,
+            string legendTitle,
+            string unit,
+            double? avg,
+            double? min,
+            double? max)
         {
             int barY = height - 74;
             using (var labelFont = new Font("Segoe UI", 9.5f, FontStyle.Bold))
             using (var smallFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             using (var textBrush = new SolidBrush(Color.FromArgb(30, 41, 59)))
             {
+                if (isAgreementMap)
+                {
+                    string op = EnsembleStats.IsBelowThresholdWarning(result.Parameter) ? "≤" : "≥";
+                    string pUnit = string.IsNullOrEmpty(result.Unit) ? "" : (" " + result.Unit);
+                    g.DrawString("Shoda " + op + " " + result.EffectiveAgreementThreshold.ToString("0.#", CultureInfo.InvariantCulture) + pUnit + ":", labelFont, textBrush, 30, barY + 6);
+
+                    double[] agStops = new double[] { 0, 15, 30, 50, 70, 85, 100 };
+                    int ax = 200;
+                    for (int i = 0; i < agStops.Length; i++)
+                    {
+                        Color c = GetAgreementColor(agStops[i]);
+                        using (var b = new SolidBrush(c))
+                        using (var p = new Pen(Color.FromArgb(148, 163, 184), 1f))
+                        {
+                            g.FillRectangle(b, ax, barY + 5, 38, 18);
+                            g.DrawRectangle(p, ax, barY + 5, 38, 18);
+                        }
+                        g.DrawString(agStops[i].ToString("0", CultureInfo.InvariantCulture) + "%", smallFont, textBrush, ax + 2, barY + 26);
+                        ax += 44;
+                    }
+
+                    string agStats = avg.HasValue
+                        ? string.Format(CultureInfo.InvariantCulture, "Průměrná shoda ČR: {0:0} %   |   Max kraj: {1:0} %", avg.Value, max.Value)
+                        : "Data nejsou k dispozici.";
+                    SizeF agSz = g.MeasureString(agStats, labelFont);
+                    g.DrawString(agStats, labelFont, textBrush, width - 30 - agSz.Width, barY + 12);
+                    return;
+                }
+
                 g.DrawString(legendTitle, labelFont, textBrush, 30, barY + 6);
 
-                if (param == WeatherParameter.SignificantWeather)
+                if (result.Parameter == WeatherParameter.SignificantWeather)
                 {
                     var sigStops = new[] {
                         Tuple.Create(0.0, "Jasno"),
@@ -634,7 +709,7 @@ namespace MeteoSrazky
                     int sx = 120;
                     foreach (var st in sigStops)
                     {
-                        Color c = GetValueColor(st.Item1, param);
+                        Color c = GetValueColor(st.Item1, result.Parameter);
                         using (var b = new SolidBrush(c))
                         using (var p = new Pen(Color.FromArgb(148, 163, 184), 1f))
                         {
@@ -652,11 +727,11 @@ namespace MeteoSrazky
                     return;
                 }
 
-                double[] stops = GetLegendStops(param);
+                double[] stops = GetLegendStops(result.Parameter);
                 int x = 185;
                 for (int i = 0; i < stops.Length; i++)
                 {
-                    Color c = GetValueColor(stops[i], param);
+                    Color c = GetValueColor(stops[i], result.Parameter);
                     using (var b = new SolidBrush(c))
                     using (var p = new Pen(Color.FromArgb(148, 163, 184), 1f))
                     {
@@ -677,42 +752,6 @@ namespace MeteoSrazky
             }
         }
 
-        private static double NearestGridValue(double x, double y, List<Tuple<PointF, double>> pts)
-        {
-            double bestDist = double.MaxValue;
-            double bestVal = 0;
-            for (int i = 0; i < pts.Count; i++)
-            {
-                double dx = x - pts[i].Item1.X;
-                double dy = y - pts[i].Item1.Y;
-                double d2 = dx * dx + dy * dy;
-                if (d2 < bestDist)
-                {
-                    bestDist = d2;
-                    bestVal = pts[i].Item2;
-                }
-            }
-            return bestVal;
-        }
-
-        private static double InterpolateIdw(double x, double y, List<Tuple<PointF, double>> pts)
-        {
-            double num = 0;
-            double den = 0;
-            for (int i = 0; i < pts.Count; i++)
-            {
-                double dx = x - pts[i].Item1.X;
-                double dy = y - pts[i].Item1.Y;
-                double d2 = dx * dx + dy * dy;
-                if (d2 < 1.0)
-                    return pts[i].Item2;
-                double w = 1.0 / (d2 * Math.Sqrt(d2));
-                num += w * pts[i].Item2;
-                den += w;
-            }
-            return den > 0 ? num / den : 0;
-        }
-
         public static Color GetPrecipColor(double mm)
         {
             return GetValueColor(mm, WeatherParameter.TotalPrecipitation);
@@ -727,12 +766,17 @@ namespace MeteoSrazky
                 case WeatherParameter.Temperature2mMax:
                 case WeatherParameter.Temperature2mMin:
                 case WeatherParameter.Temperature850hPa:
+                case WeatherParameter.DewPoint2m:
                     return new double[] { -15, -10, -5, 0, 5, 10, 15, 20, 25, 30 };
                 case WeatherParameter.CloudCover:
                     return new double[] { 0, 10, 25, 40, 55, 70, 85, 95 };
                 case WeatherParameter.WindGusts10m:
                 case WeatherParameter.WindSpeed10m:
                     return new double[] { 10, 20, 30, 40, 50, 65, 80, 100 };
+                case WeatherParameter.Cape:
+                    return new double[] { 0, 100, 300, 600, 1000, 1500, 2200, 3000 };
+                case WeatherParameter.FreezingLevelHeight:
+                    return new double[] { 0, 500, 1000, 1500, 2200, 3000, 3800, 4500 };
                 case WeatherParameter.UtciMax:
                     return new double[] { -13, 0, 9, 20, 26, 32, 38, 46 };
                 default:
@@ -759,6 +803,7 @@ namespace MeteoSrazky
                 case WeatherParameter.Temperature2mMax:
                 case WeatherParameter.Temperature2mMin:
                 case WeatherParameter.Temperature850hPa:
+                case WeatherParameter.DewPoint2m:
                     if (val < -10.0) return Color.FromArgb(30, 58, 138);
                     if (val < -5.0) return Color.FromArgb(59, 130, 246);
                     if (val < 0.0) return Color.FromArgb(147, 197, 253);
@@ -788,26 +833,44 @@ namespace MeteoSrazky
                     if (val < 100.0) return Color.FromArgb(192, 38, 211);
                     return Color.FromArgb(126, 34, 206);
 
+                case WeatherParameter.Cape:
+                    if (val < 50.0) return Color.FromArgb(241, 245, 249);
+                    if (val < 200.0) return Color.FromArgb(220, 252, 231);
+                    if (val < 500.0) return Color.FromArgb(134, 239, 172);
+                    if (val < 1000.0) return Color.FromArgb(253, 224, 71);
+                    if (val < 1600.0) return Color.FromArgb(251, 146, 60);
+                    if (val < 2400.0) return Color.FromArgb(239, 68, 68);
+                    return Color.FromArgb(162, 28, 175);
+
+                case WeatherParameter.FreezingLevelHeight:
+                    if (val < 400.0) return Color.FromArgb(30, 58, 138);
+                    if (val < 900.0) return Color.FromArgb(59, 130, 246);
+                    if (val < 1400.0) return Color.FromArgb(125, 211, 252);
+                    if (val < 2000.0) return Color.FromArgb(110, 231, 183);
+                    if (val < 2800.0) return Color.FromArgb(253, 224, 71);
+                    if (val < 3600.0) return Color.FromArgb(251, 146, 60);
+                    return Color.FromArgb(239, 68, 68);
+
                 case WeatherParameter.UtciMax:
-                    if (val < -13.0) return Color.FromArgb(30, 58, 138);   // Strong cold stress
-                    if (val < 0.0) return Color.FromArgb(59, 130, 246);    // Moderate cold stress
-                    if (val < 9.0) return Color.FromArgb(147, 197, 253);   // Slight cold stress
-                    if (val < 26.0) return Color.FromArgb(134, 239, 172);  // No thermal stress
-                    if (val < 32.0) return Color.FromArgb(253, 224, 71);   // Moderate heat stress
-                    if (val < 38.0) return Color.FromArgb(249, 115, 22);   // Strong heat stress
-                    if (val < 46.0) return Color.FromArgb(220, 38, 38);    // Very strong heat stress
-                    return Color.FromArgb(153, 27, 27);                    // Extreme heat stress
+                    if (val < -13.0) return Color.FromArgb(30, 58, 138);
+                    if (val < 0.0) return Color.FromArgb(59, 130, 246);
+                    if (val < 9.0) return Color.FromArgb(147, 197, 253);
+                    if (val < 26.0) return Color.FromArgb(134, 239, 172);
+                    if (val < 32.0) return Color.FromArgb(253, 224, 71);
+                    if (val < 38.0) return Color.FromArgb(249, 115, 22);
+                    if (val < 46.0) return Color.FromArgb(220, 38, 38);
+                    return Color.FromArgb(153, 27, 27);
 
                 case WeatherParameter.SignificantWeather:
                     int wmo = (int)Math.Round(val);
-                    if (wmo <= 1) return Color.FromArgb(254, 249, 195);    // Clear / mostly clear
-                    if (wmo <= 3) return Color.FromArgb(203, 213, 225);    // Cloudy / overcast
-                    if (wmo <= 48) return Color.FromArgb(253, 230, 138);   // Fog
-                    if (wmo <= 57) return Color.FromArgb(167, 243, 208);   // Drizzle
-                    if (wmo <= 67) return Color.FromArgb(56, 189, 248);    // Rain / freezing rain
-                    if (wmo <= 77) return Color.FromArgb(192, 132, 252);   // Snow
-                    if (wmo <= 86) return Color.FromArgb(168, 85, 247);    // Showers
-                    return Color.FromArgb(239, 68, 68);                    // Thunderstorm
+                    if (wmo <= 1) return Color.FromArgb(254, 249, 195);
+                    if (wmo <= 3) return Color.FromArgb(203, 213, 225);
+                    if (wmo <= 48) return Color.FromArgb(253, 230, 138);
+                    if (wmo <= 57) return Color.FromArgb(167, 243, 208);
+                    if (wmo <= 67) return Color.FromArgb(56, 189, 248);
+                    if (wmo <= 77) return Color.FromArgb(192, 132, 252);
+                    if (wmo <= 86) return Color.FromArgb(168, 85, 247);
+                    return Color.FromArgb(239, 68, 68);
 
                 default:
                     if (val <= 0.05) return Color.FromArgb(241, 245, 249);

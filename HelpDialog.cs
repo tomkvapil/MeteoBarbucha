@@ -9,8 +9,8 @@ namespace MeteoSrazky
         public HelpDialog()
         {
             Text = "Návod k použití — MeteoBarbucha ČR";
-            Size = new Size(820, 680);
-            MinimumSize = new Size(640, 480);
+            Size = new Size(860, 700);
+            MinimumSize = new Size(660, 500);
             StartPosition = FormStartPosition.CenterParent;
             Font = new Font("Segoe UI", 9.5f);
             BackColor = Color.White;
@@ -60,42 +60,36 @@ namespace MeteoSrazky
         private static void PopulateContent(RichTextBox rtb)
         {
             AppendHeading(rtb, "MeteoBarbucha ČR (v" + UpdateService.CurrentVersion + ") — Návod k použití", 15f);
-            AppendText(rtb, "Aplikace stahuje předpovědi pro všech 14 krajů ČR i prostorovou síť ČR a příhraničí napříč numerickými modely z více nezávislých zdrojů (Open-Meteo, MET Norway, Bright Sky DWD a Meteologix), počítá statistiky a vykresluje plynulé mapy, meteogramy i vertikální termodiagramy.\n\n");
+            AppendText(rtb, "Aplikace slouží jako multi-modelový analyzátor předpovědí pro meteorology. Vyhodnocuje 14 krajů i všech 206 ORP v ČR napříč otevřenými zdroji (Open-Meteo, MET Norway, Bright Sky DWD) i Meteologix API.\n\n");
 
-            AppendHeading(rtb, "1. Rychlý postup (krok za krokem)", 11.5f);
+            AppendHeading(rtb, "1. Rychlý postup a šetrný start bez automatického stahování", 11.5f);
             AppendText(rtb,
-                "1) V levém panelu vyberte Parametr předpovědi (Srážky, Sníh, Teplota 2m Max/Min, T850, Oblačnost, Vítr/Nárazy, UTCI nebo Significant Weather).\n" +
-                "   • Při přepnutí parametru se data načtou automaticky (s 500ms prodlevou a využitím 12h mezipaměti).\n" +
-                "2) Volitelně zapněte Výstraha ≥ a nastavte prahovou hodnotu (červené šrafování + symbol ⚠ na mapě).\n" +
-                "3) Zvolte výpočet za kraj (Průměr v kraji, Maximum v kraji nebo Krajské město).\n" +
-                "4) Vyberte období — buď Po dnech (1–7 dní), nebo Vlastní úsek v hodinách (Od – Do).\n" +
-                "5) Zaškrtněte modely a klikněte na „Stáhnout data a spočítat“.\n" +
-                "6) Pro uložení všech PNG map a CSV tabulky klikněte na „Uložit snímky a tabulku“. Tlačítkem „Vymazat mezipaměť (cache)“ vynutíte čerstvé stažení dat ze sítě.\n\n");
+                "1) Po spuštění nejsou záměrně zaškrtnuty žádné modely a nic se nestahuje, aby se šetřily limity otevřených API.\n" +
+                "2) Zaškrtněte požadované modely (nebo klikněte na rychlou předvolbu Hi-Res, Globální, Alt. zdroje či Vše) a stiskněte „Stáhnout data a spočítat“.\n" +
+                "   • Probíhající stahování ukazuje přesný postup a lze jej kdykoli přerušit tlačítkem „✕ Zrušit“.\n" +
+                "   • Jakmile proběhne první stažení, každá další změna parametru již automaticky načte data pro vybrané modely (s 500ms prodlevou a využitím 12h mezipaměti).\n" +
+                "3) Všechna období v režimu „Horizont dopředu“ začínají od aktuální celé hodiny (+24 až +168 h), takže se srážky i teploty porovnávají napříč všemi zdroji nad identickým časovým úsekem.\n\n");
 
-            AppendHeading(rtb, "2. Časová osa s animací, Meteogram a Předpovědní termodiagram", 11.5f);
+            AppendHeading(rtb, "2. Pravděpodobnostní shoda, percentily, klouzavé úhrny a ORP", 11.5f);
             AppendText(rtb,
-                "• Časová osa a přehrávání (▶ Přehrát / ⏸ Pauza): Umožňuje krokovat nebo plynule animovat vývoj předpovědi po jednotlivých dnech či hodinách současně pro tabulku, Multi-view, Detail i Výběr oblast (krajní poloha vlevo = souhrn za celé období).\n" +
-                "• Spaghetti meteogram: Kliknutím na libovolné místo v detailu mapy nebo v záložce Výběr oblast se otevře graf vývoje daného prvku v čase pro všechny načtené modely.\n" +
-                "• Předpovědní termodiagram (Skew-T / Emagram): Při zvoleném parametru Significant Weather otevře kliknutí na mapu jednotlivého modelu vertikální sondáž atmosféry (teplota T, rosný bod Td a vítr v hladinách 1000–200 hPa) s posuvníkem času a přepínačem Skew-T / Emagram. Na souhrnných mapách (Průměr, Max, Rozptyl) se neotvírá.\n" +
-                "• Chybějící data modelu: Pokud některý model daný parametr neposkytuje (např. ALADIN CZ, MET Norway či Bright Sky pro 850 hPa), zobrazí se na jeho mapě červený přeškrtnutý kruh a do souhrnných map (Průměr, Max, Rozptyl) není zahrnut.\n\n");
+                "• Mapa a sloupec Shoda modelů (%): Ukazuje procento modelů překračujících zvolený práh (např. ≥ 30 mm u srážek nebo ≤ −12 °C u minimální teploty). Tlačítko „Prahy ČHMÚ ▾“ nabízí přednastavené stupně nebezpečí.\n" +
+                "• Medián (P50) a percentily P10 / P90: Robustní statistiky odolné vůči odlehlým běhům jednotlivých modelů v tabulkách, mapách i ve stínovaném pásmu meteogramu.\n" +
+                "• Klouzavý úhrn / okno (1h, 3h, 6h, 12h, 24h): Okamžitě bez síťového dotazu přepočítá maximální krátkodobou intenzitu nebo klouzavý úhrn v rámci zvoleného období.\n" +
+                "• Záložka Tabulka ORP (206 obcí): Hodnoty pro všech 206 obcí s rozšířenou působností z vyhlazeného pole mapy, s vyhledáváním, filtrem nadprahové shody, řazením podle libovolného sloupce, exportem do CSV a dvojklikem pro otevření meteogramu.\n" +
+                "• Kontrola stáří běhu a odvozených veličin: Modely se stářím běhu > 12 hodin jsou zvýrazněny oranžovým varováním (⚠ >12h). Dopočtené veličiny u alternativních zdrojů jsou označeny symbolem * a poznámkou v hlavičce mapy.\n\n");
 
-            AppendHeading(rtb, "3. Mapy ČR (Multi-view, Detail a Výběr oblast)", 11.5f);
+            AppendHeading(rtb, "3. Konvekční parametry, Termodiagram a Časová osa", 11.5f);
             AppendText(rtb,
-                "• Mapy mají reálné hranice ČR, 14 krajů, světle šedé hranice ORP, pozice krajských měst a v hlavičce zobrazují přesný čas běhu modelu.\n" +
-                "• Mapy jsou vyhlazené jemnou 4-bodovou IDW interpolací ze sítě bodů ČR a příhraničního prstence (vzdálené zahraniční body mimo ČR jsou vynechány pro ~30% úsporu kvóty API při totožné hustotě v ČR).\n" +
-                "• Záložka Výběr oblast: Synchronizuje přiblížení a posun napříč všemi modely najednou (předvolby oblastí, Lupa +/-, klávesy +, −, 0, šipky). Najetím myši se ukáže plovoucí štítek s přesnou hodnotou pod kurzorem.\n\n");
+                "• 13 parametrů: Srážky, Sníh, T2m Max/Min, T850, Rosný bod 2m, Oblačnost, Nárazy a Rychlost větru 10m, CAPE (J/kg), Výška nulové izotermy (m n. m.), UTCI a Significant Weather.\n" +
+                "• Rozšířený předpovědní termodiagram (Skew-T / Emagram): U parametru Significant Weather otevře kliknutí na mapu jednotlivého modelu vertikální sondáž ve 13 hladinách (1000–200 hPa) se suchými adiabatami a panelem indexů (LCL, K-Index, Total Totals, Lifted Index, CAPE, hladina 0 °C). Pokud přízemní zdroj nemá výškové hladiny, diagram transparentně uvede použitý výškový model.\n" +
+                "• Klávesové zkratky časové osy: Mezerník spustí/pozastaví animaci (▶ Přehrát / ⏸ Pauza), šipky ← / → (v záložce Výběr oblast Alt+← / Alt+→) krokují po hodinách.\n\n");
 
-            AppendHeading(rtb, "4. Více zdrojů dat, úspora Open-Meteo API a klíče", 11.5f);
+            AppendHeading(rtb, "4. Okno ⚙ Nastavení, šifrování klíčů, offline záloha a diagnostika", 11.5f);
             AppendText(rtb,
-                "• Automaticky (více zdrojů + záloha při 429): Kombinuje vybrané modely z Open-Meteo, MET Norway a Bright Sky (DWD). Pokud na sdílené síti (např. ČHMÚ) narazí Open-Meteo na limit 429, aplikace automaticky přepne na otevřené zdroje MET Norway + Bright Sky.\n" +
-                "• Alternativní zdroje (MET Norway + Bright Sky): Stahuje výhradně z bezplatných otevřených API Norského meteorologického institutu (YR.no / ECMWF) a Bright Sky (DWD Open Data) bez klíče a s 0 dotazy na Open-Meteo.\n" +
-                "• Open-Meteo klíč / vlastní URL (volitelné): Umožňuje zadat komerční klíč (customer-api.open-meteo.com) nebo URL vlastní interní instance Open-Meteo.\n" +
-                "• Meteologix API (X-API-Key) + tlačítko Ověřit: Otestuje platnost klíče na oficiálním v02 API. U tarifů s omezeným počtem povolených lokalit (HTTP 403 mimo povolená místa) aplikace automaticky načte povolené kraje a ostatní přeskočí.\n" +
-                "• 12h disková mezipaměť: Odpovědi všech zdrojů i časy běhů modelů (meta.json) se ukládají komprimovaně na disk. U zdrojů MET Norway a Bright Sky obsahuje 1 stažení všechny parametry najednou, takže přepínání parametrů nevyžaduje žádné další síťové dotazy.\n\n");
-
-            AppendHeading(rtb, "5. Automatické aktualizace a přenositelnost", 11.5f);
-            AppendText(rtb,
-                "• Aplikace je přenositelná (jediný soubor MeteoBarbucha.exe). Při každém spuštění automaticky kontroluje aktualizace z GitHub Releases a přes tlačítko Aktualizace je lze spravovat i ručně.");
+                "• Tlačítko „⚙ Nastavení“ v horní liště sdružuje výběr zdroje dat, API klíče, výstupní složku, automatické stahování a správu mezipaměti, takže levý panel zůstává přehledný.\n" +
+                "• Zabezpečení DPAPI: API klíče (Meteologix i Open-Meteo) se do settings.json ukládají šifrovaně pomocí vestavěné ochrany Windows DPAPI vázané na váš účet.\n" +
+                "• Rozložené automatické stahování: Časovač automaticky přidává náhodný posun (+1 až +12 min), aby se požadavky více stanic nesešly ve stejný okamžik.\n" +
+                "• Offline záloha a Diagnostika: Při výpadku sítě aplikace automaticky načte poslední dostupná data z mezipaměti (až 72 h) s výrazným označením OFFLINE ZÁLOHA. Tlačítko Diagnostika vypíše kompletní provozní přehled a otevře složku rotovaných logů.");
         }
 
         private static void AppendHeading(RichTextBox rtb, string text, float size)

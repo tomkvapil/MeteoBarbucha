@@ -21,7 +21,7 @@ namespace MeteoSrazky
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
             var client = new HttpClient();
             client.Timeout = TimeSpan.FromSeconds(25);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("MeteoBarbuchaCZ/1.3.3 (https://github.com/tomkvapil/MeteoBarbucha; tom.kvapil89@gmail.com)");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("MeteoBarbuchaCZ/1.4.0 (https://github.com/tomkvapil/MeteoBarbucha; tom.kvapil89@gmail.com)");
             return client;
         }
 
@@ -30,6 +30,7 @@ namespace MeteoSrazky
             public DateTime LocalHour;
             public double? TempC;
             public double? RhPct;
+            public double? DewPointC;
             public double? WindKmh;
             public double? GustKmh;
             public double? CloudPct;
@@ -44,7 +45,6 @@ namespace MeteoSrazky
             public double Latitude;
             public double Longitude;
             public string RegionCode;
-            public bool IsRegionalCentroid;
             public Dictionary<string, List<HourlyRecord>> RecordsByModel = new Dictionary<string, List<HourlyRecord>>();
             public Dictionary<string, double?> AggValueByModel = new Dictionary<string, double?>();
             public Dictionary<string, double?[]> SeriesByModel = new Dictionary<string, double?[]>();
@@ -61,71 +61,52 @@ namespace MeteoSrazky
             return list;
         }
 
+        public static string GetDerivedParameterNote(string modelId, WeatherParameter param)
+        {
+            switch (param)
+            {
+                case WeatherParameter.Snowfall:
+                    return "odvozeno ze srážek a T2m";
+                case WeatherParameter.SignificantWeather:
+                    return modelId == MetNoId ? "převod ze symbolů YR.no" : "převod ze stavů DWD";
+                case WeatherParameter.UtciMax:
+                    return modelId == MetNoId ? "záření odhadnuto z oblačnosti" : "vypočteno z T, RH, větru a záření";
+                case WeatherParameter.DewPoint2m:
+                    return "odvozeno z T2m a RH";
+                default:
+                    return null;
+            }
+        }
+
         public static async Task PopulateAlternativeModelsAsync(
             List<WeatherModelInfo> altModels,
             ForecastResult result,
-            int forecastDays,
-            DateTime? startHour,
-            DateTime? endHour,
+            DateTime windowStart,
+            DateTime windowEnd,
             WeatherParameterInfo paramInfo,
             Action<string> log,
+            Action<int, int, string> progress,
             CancellationToken ct)
         {
             if (altModels == null || altModels.Count == 0)
                 return;
 
-            bool useHourly = startHour.HasValue && endHour.HasValue;
-            DateTime nowLocal = DateTime.Now;
-            DateTime windowStart = useHourly
-                ? startHour.Value
-                : new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, 0, 0, 0);
-            DateTime windowEnd = useHourly
-                ? endHour.Value
-                : windowStart.AddDays(forecastDays).AddHours(-1);
-
-            // Build time steps if Open-Meteo did not populate them (standalone or 429 fallback mode)
             bool standaloneGrid = (result.GridPoints == null || result.GridPoints.Count == 0);
-            bool isDailyTimeline = false;
 
+            // Populate exact hourly TimeSteps [windowStart .. windowEnd] if standalone
             if (result.TimeSteps.Count == 0)
             {
-                if (!useHourly && !paramInfo.ForceHourly)
+                DateTime cur = windowStart;
+                while (cur <= windowEnd)
                 {
-                    isDailyTimeline = true;
-                    for (int d = 0; d < forecastDays; d++)
-                    {
-                        string ds = windowStart.AddDays(d).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                        result.Dates.Add(ds);
-                        result.TimeSteps.Add(ds);
-                    }
-                    if (result.Dates.Count > 0)
-                    {
-                        result.PeriodDescription = result.Dates[0] + " až " + result.Dates[result.Dates.Count - 1] + " (" + forecastDays + " dny)";
-                    }
+                    string ts = cur.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
+                    result.Dates.Add(ts);
+                    result.TimeSteps.Add(ts);
+                    cur = cur.AddHours(1);
                 }
-                else
-                {
-                    isDailyTimeline = false;
-                    DateTime cur = windowStart;
-                    while (cur <= windowEnd)
-                    {
-                        string ts = cur.ToString("yyyy-MM-ddTHH:00", CultureInfo.InvariantCulture);
-                        result.Dates.Add(ts);
-                        result.TimeSteps.Add(ts);
-                        cur = cur.AddHours(1);
-                    }
-                    if (!useHourly && result.Dates.Count > 0)
-                    {
-                        result.PeriodDescription = result.Dates[0].Substring(0, 10) + " až " + result.Dates[result.Dates.Count - 1].Substring(0, 10) + " (" + forecastDays + " dny)";
-                    }
-                }
-            }
-            else
-            {
-                isDailyTimeline = result.TimeSteps[0].Length <= 10;
             }
 
-            // Build ~56 sample locations: 14 regional centroids + ~42 Czechia & border grid points
+            // Build ~58 sample locations: 14 regional centroids + ~44 Czechia & border grid points
             var samples = new List<SamplePoint>();
             foreach (var r in CzechData.Regions)
             {
@@ -133,8 +114,7 @@ namespace MeteoSrazky
                 {
                     Latitude = Math.Round(r.Latitude, 4),
                     Longitude = Math.Round(r.Longitude, 4),
-                    RegionCode = r.Code,
-                    IsRegionalCentroid = true
+                    RegionCode = r.Code
                 });
             }
 
@@ -151,8 +131,7 @@ namespace MeteoSrazky
                     {
                         Latitude = rLat,
                         Longitude = rLon,
-                        RegionCode = CzechData.FindRegionCode(rLat, rLon),
-                        IsRegionalCentroid = false
+                        RegionCode = CzechData.FindRegionCode(rLat, rLon)
                     });
                 }
             }
@@ -161,44 +140,52 @@ namespace MeteoSrazky
             {
                 ct.ThrowIfCancellationRequested();
 
-                // Temperature 850 hPa is not provided by surface endpoints -> mark as null (renders red crossed circle)
-                if (paramInfo.Parameter == WeatherParameter.Temperature850hPa)
+                // Parameters not available in surface-only alternative endpoints -> null (renders red crossed circle cleanly)
+                if (paramInfo.Parameter == WeatherParameter.Temperature850hPa ||
+                    paramInfo.Parameter == WeatherParameter.Cape ||
+                    paramInfo.Parameter == WeatherParameter.FreezingLevelHeight)
                 {
                     EnsureModelAdded(result, model);
                     foreach (var r in CzechData.Regions)
                         result.RegionModelSums[r.Code][model.Id] = null;
 
                     if (standaloneGrid)
-                    {
                         EnsureStandaloneGridCreated(result, samples);
-                    }
+
                     foreach (var gp in result.GridPoints)
                     {
                         gp.ModelValues[model.Id] = null;
                         gp.ModelSeries[model.Id] = null;
                     }
-                    log(model.DisplayName + ": hladina 850 hPa není v tomto zdroji k dispozici (vynecháno ze souhrnů).");
+                    log(model.DisplayName + ": parametr '" + paramInfo.DisplayName + "' není v tomto zdroji k dispozici (vynecháno ze souhrnů).");
                     continue;
                 }
 
                 int cacheHits = 0;
                 int netCalls = 0;
+                int offlineHits = 0;
+                int completedPts = 0;
+                DateTime oldestOffline = DateTime.MaxValue;
                 string runTimeStr = null;
+                DateTime? runTimeUtc = null;
                 var runLock = new object();
                 var sem = new SemaphoreSlim(8);
                 var tasks = new List<Task>();
 
                 string bsStartDate = windowStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string bsLastDate = windowEnd.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                int totalPts = samples.Count;
 
-                log("Načítám " + model.DisplayName + " (" + samples.Count + " bodů ČR)...");
+                log("Načítám " + model.DisplayName + " (" + totalPts + " bodů ČR)...");
+                if (progress != null)
+                    progress(0, totalPts, "Stahuji " + model.DisplayName + ": 0 / " + totalPts + " bodů...");
 
                 foreach (var sp in samples)
                 {
                     var sample = sp;
                     tasks.Add(Task.Run(async () =>
                     {
-                        await sem.WaitAsync(ct);
+                        await sem.WaitAsync(ct).ConfigureAwait(false);
                         try
                         {
                             string url;
@@ -224,37 +211,59 @@ namespace MeteoSrazky
                             }
                             else
                             {
-                                json = await FetchStringSafeAsync(url, ct);
+                                json = await FetchStringSafeAsync(url, ct).ConfigureAwait(false);
                                 if (!string.IsNullOrEmpty(json))
                                 {
                                     DiskCache.Put(url, json);
                                     Interlocked.Increment(ref netCalls);
+                                }
+                                else
+                                {
+                                    DateTime staleAt;
+                                    string staleJson = DiskCache.TryGetStale(url, out staleAt);
+                                    if (!string.IsNullOrEmpty(staleJson))
+                                    {
+                                        json = staleJson;
+                                        Interlocked.Increment(ref offlineHits);
+                                        lock (runLock)
+                                        {
+                                            if (staleAt < oldestOffline)
+                                                oldestOffline = staleAt;
+                                        }
+                                    }
                                 }
                             }
 
                             if (!string.IsNullOrEmpty(json))
                             {
                                 string extractedRun;
+                                DateTime? extractedUtc;
                                 List<HourlyRecord> recs = model.Id == MetNoId
-                                    ? ParseMetNoJson(json, out extractedRun)
-                                    : ParseBrightSkyJson(json, out extractedRun);
+                                    ? ParseMetNoJson(json, out extractedRun, out extractedUtc)
+                                    : ParseBrightSkyJson(json, out extractedRun, out extractedUtc);
 
                                 lock (runLock)
                                 {
                                     sample.RecordsByModel[model.Id] = recs;
                                     if (runTimeStr == null && !string.IsNullOrEmpty(extractedRun))
+                                    {
                                         runTimeStr = extractedRun;
+                                        runTimeUtc = extractedUtc;
+                                    }
                                 }
                             }
                         }
                         finally
                         {
+                            int done = Interlocked.Increment(ref completedPts);
+                            if (progress != null && (done % 4 == 0 || done == totalPts))
+                                progress(done, totalPts, "Stahuji " + model.DisplayName + ": " + done + " / " + totalPts + " bodů...");
                             sem.Release();
                         }
                     }, ct));
                 }
 
-                await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks).ConfigureAwait(false);
 
                 int validSamples = 0;
                 foreach (var sp in samples)
@@ -264,7 +273,7 @@ namespace MeteoSrazky
                         continue;
 
                     double? aggVal = EvaluateWindowAggregate(recs, windowStart, windowEnd, paramInfo);
-                    double?[] series = EvaluateTimelineSeries(recs, result.TimeSteps, isDailyTimeline, paramInfo);
+                    double?[] series = EvaluateTimelineSeries(recs, result.TimeSteps, paramInfo);
 
                     sp.AggValueByModel[model.Id] = aggVal;
                     sp.SeriesByModel[model.Id] = series;
@@ -275,12 +284,27 @@ namespace MeteoSrazky
                 if (validSamples == 0)
                 {
                     log("Upozornění: " + model.DisplayName + " nevrátil žádná platná data.");
+                    AppLogger.Warn(model.DisplayName + " nevrátil žádná platná data.");
                     continue;
                 }
 
                 EnsureModelAdded(result, model);
                 if (!string.IsNullOrEmpty(runTimeStr))
                     result.ModelRunTimes[model.Id] = runTimeStr;
+                if (runTimeUtc.HasValue)
+                    result.ModelRunUtcTimes[model.Id] = runTimeUtc.Value;
+
+                string derivedNote = GetDerivedParameterNote(model.Id, paramInfo.Parameter);
+                if (!string.IsNullOrEmpty(derivedNote))
+                    result.ModelNotes[model.Id] = derivedNote;
+
+                if (offlineHits > 0 && netCalls == 0)
+                {
+                    result.IsOfflineFallback = true;
+                    if (oldestOffline < DateTime.MaxValue)
+                        result.OfflineCachedAt = oldestOffline;
+                    log("⚠ " + model.DisplayName + ": síť nedostupná — načtena OFFLINE záloha z mezipaměti (" + offlineHits + " bodů).");
+                }
 
                 // Populate 14 regional centroid values (first 14 samples)
                 for (int i = 0; i < CzechData.Regions.Count && i < samples.Count; i++)
@@ -307,7 +331,6 @@ namespace MeteoSrazky
                 }
                 else
                 {
-                    // Interpolate onto existing Open-Meteo 0.25x0.35 grid using 4-NN IDW so maps & meteograms match seamlessly
                     InterpolateOntoGrid(result.GridPoints, samples, model.Id, result.TimeSteps.Count);
                 }
 
@@ -447,25 +470,27 @@ namespace MeteoSrazky
                 bool shouldRetry = false;
                 try
                 {
-                    using (var resp = await _http.GetAsync(url, ct))
+                    using (var resp = await _http.GetAsync(url, ct).ConfigureAwait(false))
                     {
                         if ((int)resp.StatusCode == 429 || (int)resp.StatusCode == 503)
                         {
                             if (attempt == 0)
                             {
-                                await Task.Delay(1500, ct);
+                                await Task.Delay(1500, ct).ConfigureAwait(false);
                                 continue;
                             }
                             return null;
                         }
                         if (!resp.IsSuccessStatusCode)
                             return null;
-                        return await resp.Content.ReadAsStringAsync();
+                        return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
                 {
-                    throw;
+                    if (ct.IsCancellationRequested)
+                        throw;
+                    shouldRetry = (attempt == 0);
                 }
                 catch
                 {
@@ -474,7 +499,7 @@ namespace MeteoSrazky
                 }
 
                 if (shouldRetry)
-                    await Task.Delay(600, ct);
+                    await Task.Delay(600, ct).ConfigureAwait(false);
             }
             return null;
         }
@@ -487,6 +512,7 @@ namespace MeteoSrazky
                 case WeatherParameter.Snowfall: return r.SnowCm;
                 case WeatherParameter.Temperature2mMax:
                 case WeatherParameter.Temperature2mMin: return r.TempC;
+                case WeatherParameter.DewPoint2m: return r.DewPointC;
                 case WeatherParameter.CloudCover: return r.CloudPct;
                 case WeatherParameter.WindGusts10m: return r.GustKmh ?? r.WindKmh;
                 case WeatherParameter.WindSpeed10m: return r.WindKmh;
@@ -532,13 +558,15 @@ namespace MeteoSrazky
             }
         }
 
-        private static double?[] EvaluateTimelineSeries(List<HourlyRecord> recs, List<string> timeSteps, bool isDailyTimeline, WeatherParameterInfo paramInfo)
+        private static double?[] EvaluateTimelineSeries(List<HourlyRecord> recs, List<string> timeSteps, WeatherParameterInfo paramInfo)
         {
             if (timeSteps == null || timeSteps.Count == 0)
                 return null;
 
+            bool isDaily = timeSteps[0].Length <= 10;
             var series = new double?[timeSteps.Count];
-            if (isDailyTimeline)
+
+            if (isDaily)
             {
                 for (int i = 0; i < timeSteps.Count; i++)
                 {
@@ -569,9 +597,20 @@ namespace MeteoSrazky
             return series;
         }
 
-        private static List<HourlyRecord> ParseMetNoJson(string json, out string runTimeFormatted)
+        private static double? ComputeDewPointC(double? tempC, double? rhPct)
+        {
+            if (!tempC.HasValue || !rhPct.HasValue) return null;
+            double rh = Math.Max(1.0, Math.Min(100.0, rhPct.Value));
+            const double a = 17.625;
+            const double b = 243.04;
+            double alpha = Math.Log(rh / 100.0) + (a * tempC.Value) / (b + tempC.Value);
+            return Math.Round((b * alpha) / (a - alpha), 2);
+        }
+
+        private static List<HourlyRecord> ParseMetNoJson(string json, out string runTimeFormatted, out DateTime? runUtc)
         {
             runTimeFormatted = null;
+            runUtc = null;
             var list = new List<HourlyRecord>();
             var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
             var root = ser.DeserializeObject(json) as Dictionary<string, object>;
@@ -590,6 +629,7 @@ namespace MeteoSrazky
                     DateTime utcUpd;
                     if (DateTime.TryParse(Convert.ToString(meta["updated_at"], CultureInfo.InvariantCulture), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out utcUpd))
                     {
+                        runUtc = utcUpd;
                         runTimeFormatted = string.Format(CultureInfo.InvariantCulture, "{0:dd.MM.yyyy HH:mm} ({1:HH}Z)", utcUpd.ToLocalTime(), utcUpd);
                     }
                 }
@@ -626,6 +666,7 @@ namespace MeteoSrazky
 
                 double? tempC = ReadDouble(details, "air_temperature");
                 double? rhPct = ReadDouble(details, "relative_humidity");
+                double? dewC = ReadDouble(details, "dew_point_temperature") ?? ComputeDewPointC(tempC, rhPct);
                 double? cloudPct = ReadDouble(details, "cloud_area_fraction");
                 double? wsMs = ReadDouble(details, "wind_speed");
                 double? wgMs = ReadDouble(details, "wind_speed_of_gust");
@@ -665,6 +706,7 @@ namespace MeteoSrazky
                         LocalHour = slotHour,
                         TempC = tempC,
                         RhPct = rhPct,
+                        DewPointC = dewC,
                         WindKmh = windKmh,
                         GustKmh = gustKmh,
                         CloudPct = cloudPct,
@@ -679,9 +721,10 @@ namespace MeteoSrazky
             return list;
         }
 
-        private static List<HourlyRecord> ParseBrightSkyJson(string json, out string runTimeFormatted)
+        private static List<HourlyRecord> ParseBrightSkyJson(string json, out string runTimeFormatted, out DateTime? runUtc)
         {
             runTimeFormatted = null;
+            runUtc = null;
             var list = new List<HourlyRecord>();
             var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
             var root = ser.DeserializeObject(json) as Dictionary<string, object>;
@@ -700,6 +743,7 @@ namespace MeteoSrazky
                         if (DateTimeOffset.TryParse(Convert.ToString(s0["first_record"], CultureInfo.InvariantCulture), CultureInfo.InvariantCulture, DateTimeStyles.None, out dto))
                         {
                             DateTime utc = dto.UtcDateTime;
+                            runUtc = utc;
                             runTimeFormatted = string.Format(CultureInfo.InvariantCulture, "{0:dd.MM.yyyy HH:mm} ({1:HH}Z)", utc.ToLocalTime(), utc);
                         }
                     }
@@ -725,6 +769,7 @@ namespace MeteoSrazky
 
                 double? tempC = ReadDouble(w, "temperature");
                 double? rhPct = ReadDouble(w, "relative_humidity");
+                double? dewC = ReadDouble(w, "dew_point") ?? ComputeDewPointC(tempC, rhPct);
                 double? windKmh = ReadDouble(w, "wind_speed");
                 double? gustKmh = ReadDouble(w, "wind_gust_speed");
                 double? cloudPct = ReadDouble(w, "cloud_cover");
@@ -741,6 +786,7 @@ namespace MeteoSrazky
                     LocalHour = localHour,
                     TempC = tempC,
                     RhPct = rhPct,
+                    DewPointC = dewC,
                     WindKmh = windKmh,
                     GustKmh = gustKmh,
                     CloudPct = cloudPct,

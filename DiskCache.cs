@@ -9,9 +9,10 @@ namespace MeteoSrazky
     public static class DiskCache
     {
         private static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(12);
-        private const int MaxCacheFiles = 300;
+        private static readonly TimeSpan OfflineRetentionTtl = TimeSpan.FromHours(72);
+        private const int MaxCacheFiles = 350;
 
-        private static string GetCacheDir()
+        public static string GetCacheDirectoryPath()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             return Path.Combine(appData, "MeteoBarbucha", "cache");
@@ -25,7 +26,7 @@ namespace MeteoSrazky
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (byte b in hash)
                     sb.Append(b.ToString("x2"));
-                return Path.Combine(GetCacheDir(), sb.ToString() + ".json.gz");
+                return Path.Combine(GetCacheDirectoryPath(), sb.ToString() + ".json.gz");
             }
         }
 
@@ -45,20 +46,89 @@ namespace MeteoSrazky
                 var info = new FileInfo(path);
                 if (DateTime.UtcNow - info.LastWriteTimeUtc > ttl)
                 {
-                    File.Delete(path);
+                    // Keep file on disk up to OfflineRetentionTtl so offline fallback can still rescue data if network is down!
+                    if (DateTime.UtcNow - info.LastWriteTimeUtc > OfflineRetentionTtl)
+                        File.Delete(path);
                     return null;
                 }
 
-                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var gz = new GZipStream(fs, CompressionMode.Decompress))
-                using (var sr = new StreamReader(gz, Encoding.UTF8))
-                {
-                    return sr.ReadToEnd();
-                }
+                return ReadGzipFile(path);
             }
             catch
             {
                 return null;
+            }
+        }
+
+        public static string TryGetStale(string key, out DateTime cachedAtLocal)
+        {
+            cachedAtLocal = DateTime.MinValue;
+            try
+            {
+                string path = GetFilePath(key);
+                if (!File.Exists(path))
+                    return null;
+
+                var info = new FileInfo(path);
+                cachedAtLocal = info.LastWriteTime;
+                return ReadGzipFile(path);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string ReadGzipFile(string path)
+        {
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var gz = new GZipStream(fs, CompressionMode.Decompress))
+            using (var sr = new StreamReader(gz, Encoding.UTF8))
+            {
+                return sr.ReadToEnd();
+            }
+        }
+
+        public static void Put(string key, string json)
+        {
+            try
+            {
+                string dir = GetCacheDirectoryPath();
+                Directory.CreateDirectory(dir);
+                string path = GetFilePath(key);
+
+                using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var gz = new GZipStream(fs, CompressionMode.Compress))
+                using (var sw = new StreamWriter(gz, Encoding.UTF8))
+                {
+                    sw.Write(json);
+                }
+
+                PruneOldEntries(dir);
+            }
+            catch
+            {
+                // Ignore non-critical disk cache write errors
+            }
+        }
+
+        public static void GetCacheStats(out int fileCount, out long totalBytes)
+        {
+            fileCount = 0;
+            totalBytes = 0;
+            try
+            {
+                string dir = GetCacheDirectoryPath();
+                if (!Directory.Exists(dir))
+                    return;
+
+                var files = new DirectoryInfo(dir).GetFiles("*.json.gz");
+                fileCount = files.Length;
+                for (int i = 0; i < files.Length; i++)
+                    totalBytes += files[i].Length;
+            }
+            catch
+            {
             }
         }
 
@@ -67,7 +137,7 @@ namespace MeteoSrazky
             int count = 0;
             try
             {
-                string dir = GetCacheDir();
+                string dir = GetCacheDirectoryPath();
                 if (!Directory.Exists(dir))
                     return 0;
 
@@ -88,35 +158,12 @@ namespace MeteoSrazky
             return count;
         }
 
-        public static void Put(string key, string json)
-        {
-            try
-            {
-                string dir = GetCacheDir();
-                Directory.CreateDirectory(dir);
-                string path = GetFilePath(key);
-
-                using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (var gz = new GZipStream(fs, CompressionMode.Compress))
-                using (var sw = new StreamWriter(gz, Encoding.UTF8))
-                {
-                    sw.Write(json);
-                }
-
-                PruneOldEntries(dir);
-            }
-            catch
-            {
-                // Ignore non-critical disk cache write errors
-            }
-        }
-
         private static void PruneOldEntries(string dir)
         {
             try
             {
                 var files = new DirectoryInfo(dir).GetFiles("*.json.gz");
-                DateTime cutoff = DateTime.UtcNow - DefaultTtl;
+                DateTime cutoff = DateTime.UtcNow - OfflineRetentionTtl;
                 foreach (var f in files)
                 {
                     if (f.LastWriteTimeUtc < cutoff)

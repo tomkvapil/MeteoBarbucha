@@ -1,5 +1,5 @@
 {
-  "version": "1.3.3",
+  "version": "1.4.0",
   "downloadUrl": "https://github.com/tomkvapil/MeteoBarbucha/releases/latest/download/MeteoBarbucha.exe",
-  "notes": "Verze 1.3.3: Integrace otevřených zdrojů MET Norway (YR.no) a Bright Sky (DWD) pro úsporu Open-Meteo API a automatickou zálohu při chybě 429, animace časové osy (Přehrát/Pauza), volitelný Open-Meteo klíč/URL, vymazání cache a oprava Meteologix v02 API."
+  "notes": "Verze 1.4.0: Mapa pravděpodobnostní shody modelů, medián a percentily P10/P90, klouzavé úhrny 1–24 h, tabulka 206 ORP, parametry CAPE / hladina 0 °C / rosný bod, rozšířený termodiagram (13 hladin + indexy LCL, KI, TT, LI, CAPE), prahy ČHMÚ, přehledné okno Nastavení, šifrování klíčů DPAPI a offline režim."
 }

@@ -31,9 +31,12 @@ namespace MeteoSrazky
         Temperature2mMax,
         Temperature2mMin,
         Temperature850hPa,
+        DewPoint2m,
         CloudCover,
         WindGusts10m,
         WindSpeed10m,
+        Cape,
+        FreezingLevelHeight,
         UtciMax,
         SignificantWeather
     }
@@ -65,6 +68,23 @@ namespace MeteoSrazky
         }
     }
 
+    public class WarningPreset
+    {
+        public string Label { get; set; }
+        public double Threshold { get; set; }
+
+        public WarningPreset(string label, double threshold)
+        {
+            Label = label;
+            Threshold = threshold;
+        }
+
+        public override string ToString()
+        {
+            return Label;
+        }
+    }
+
     public enum RegionAggregationMode
     {
         RegionAverage,
@@ -87,11 +107,13 @@ namespace MeteoSrazky
         public double Longitude { get; set; }
         public string RegionCode { get; set; }
         public Dictionary<string, double?> ModelValues { get; set; }
+        public Dictionary<string, double?> BaseModelValues { get; set; }
         public Dictionary<string, double?[]> ModelSeries { get; set; }
 
         public GeoGridPoint()
         {
             ModelValues = new Dictionary<string, double?>();
+            BaseModelValues = new Dictionary<string, double?>();
             ModelSeries = new Dictionary<string, double?[]>();
         }
     }
@@ -100,30 +122,40 @@ namespace MeteoSrazky
     {
         public DateTime FetchedAt { get; set; }
         public int ForecastDays { get; set; }
+        public int RollingWindowHours { get; set; }
         public WeatherParameter Parameter { get; set; }
         public string Unit { get; set; }
         public string DataSourceLabel { get; set; }
+        public bool IsOfflineFallback { get; set; }
+        public DateTime OfflineCachedAt { get; set; }
         public double? WarningThreshold { get; set; }
+        public double EffectiveAgreementThreshold { get; set; }
         public string PeriodDescription { get; set; }
         public List<string> Dates { get; set; }
         public List<string> TimeSteps { get; set; }
         public int SelectedTimeStepIndex { get; set; }
         public List<WeatherModelInfo> Models { get; set; }
-        // Key: Region.Code -> (Key: Model.Id -> Sum/Agg in unit, or null if unavailable)
         public Dictionary<string, Dictionary<string, double?>> RegionModelSums { get; set; }
+        public Dictionary<string, Dictionary<string, double?>> BaseRegionModelSums { get; set; }
         public List<GeoGridPoint> GridPoints { get; set; }
         public Dictionary<string, string> ModelRunTimes { get; set; }
+        public Dictionary<string, DateTime> ModelRunUtcTimes { get; set; }
+        public Dictionary<string, string> ModelNotes { get; set; }
 
         public ForecastResult()
         {
             Unit = "mm";
             SelectedTimeStepIndex = -1;
+            EffectiveAgreementThreshold = 30.0;
             Dates = new List<string>();
             TimeSteps = new List<string>();
             Models = new List<WeatherModelInfo>();
             RegionModelSums = new Dictionary<string, Dictionary<string, double?>>();
+            BaseRegionModelSums = new Dictionary<string, Dictionary<string, double?>>();
             GridPoints = new List<GeoGridPoint>();
             ModelRunTimes = new Dictionary<string, string>();
+            ModelRunUtcTimes = new Dictionary<string, DateTime>();
+            ModelNotes = new Dictionary<string, string>();
         }
     }
 }

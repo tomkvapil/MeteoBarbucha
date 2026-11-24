@@ -2,6 +2,26 @@
 
 All notable changes to **MeteoBarbucha ČR** will be documented in this file.
 
+## [1.4.0] - 2026-11-24
+### Added
+- **Ensemble Threshold Agreement & Percentiles (`EnsembleStats.cs`)**:
+  - Added **Model Agreement map & table column (`Shoda modelů nad prahem %`)** showing the exact share and count of models exceeding the active threshold (supporting both `≥` and frost `≤` thresholds).
+  - Added **Median (`P50`)** and **10th / 90th Percentiles (`P10` / `P90`)** across summary maps, Kraje & ORP tables, CSV exports, and as a shaded uncertainty band in `MeteogramDialog.cs`.
+- **Sliding Accumulation / Intensity Windows (`1h`, `3h`, `6h`, `12h`, `24h`)**: Instant in-memory calculation of maximum short-duration precipitation/snowfall accumulations and parameter extrema within the selected forecast period.
+- **ORP Municipality Table (`OrpCatalog.cs`)**: Dedicated **`Tabulka ORP (206 obcí)`** tab evaluating all 206 Czech administrative municipalities from the smoothed 4-NN IDW spatial field, with live search, `≥ 50 %` agreement filter, sortable numeric columns, CSV export, and double-click meteogram/sounding drill-down.
+- **Convective & Winter Parameters**: Added **CAPE (`J/kg`)**, **Freezing Level Height (`0 °C` isotherm, `m`)**, and **2m Dew Point (`°C`)**, plus **ČHMÚ warning threshold presets (`Prahy ČHMÚ ▾`)**.
+- **Enhanced Forecast Thermodiagram (`ThermodiagramDialog.cs`)**: Expanded vertical profile to **13 pressure levels (`1000–200 hPa`)** with dry adiabats, explicit proxy-model attribution banner, and real-time convective indices (**LCL, K-Index, Total Totals, Lifted Index, CAPE, Freezing Level**).
+- **Stale Model Run Detection**: Automatic orange warning badges (`⚠ >12h`) in table headers, map headers, and logs whenever a model initialization timestamp is older than 12 hours.
+- **Settings Dialog (`SettingsDialog.cs`), Security & Reliability**:
+  - Moved data source, API keys, output directory, background timer, cache management, and diagnostics into a dedicated **`⚙ Nastavení`** dialog so the main sidebar fits cleanly without scrolling.
+  - Added **Windows DPAPI encryption (`ProtectedData`)** for API keys in `settings.json` with automatic migration from legacy plaintext keys.
+  - Added **72-hour offline cache fallback** (`OFFLINE ZÁLOHA` banner when offline), **rotating file logger (`AppLogger.cs`)** with one-click **Diagnostics dialog**, determinate download progress with **`✕ Zrušit` cancel button**, **model group presets** (`Hi-Res`, `Globální`, `Alt. zdroje`), **timeline keyboard shortcuts** (`Space`, `←`/`→`), **live data-age indicator**, and **random `+1..12 min` time jitter** on scheduled background downloads.
+### Changed
+- **Zero-request startup**: No weather models are pre-selected or auto-downloaded on startup; automatic parameter-switch fetching activates only after the user selects models and initiates the first run.
+- **Unified forecast window**: Horizon mode now evaluates the exact same future hourly window (`nowHour` to `+N × 24h`) across Open-Meteo, MET Norway, Bright Sky, and Meteologix, eliminating day-1 partial-day discrepancies.
+- **Transparent provenance & regional cartography**: Derived parameters from alternative sources are explicitly tagged (`*` / `Pozn.`), and 14-point Meteologix data renders discrete Kraje polygons instead of misleading point interpolation.
+- Updated the built-in **User Guide (`HelpDialog.cs`)** for v1.4.0.
+
 ## [1.3.3] - 2026-11-24
 ### Added
 - **Multi-source open weather providers (`AlternativeWeatherProviders.cs`)** to eliminate single-provider rate-limit bottlenecks:
@@ -11,7 +31,7 @@ All notable changes to **MeteoBarbucha ČR** will be documented in this file.
 - **Optional Open-Meteo API key / custom server URL** input (`customer-api.open-meteo.com` or self-hosted Open-Meteo instance) persisted in `SettingsManager.cs`.
 - **Clear Cache button (`Vymazat mezipaměť (cache)`)** to purge both in-memory and 12h GZIP disk caches on demand, plus 30-minute disk caching for Open-Meteo `/static/meta.json` model run timestamps.
 ### Changed
-- **~30% Open-Meteo API quota reduction** with zero loss of spatial resolution inside Czechia: kept the full `0.25° × 0.35°` grid across Czechia and a `0.38°` cross-border interpolation buffer while skipping distant foreign points.
+- **~22% Open-Meteo API location reduction** (from 234 to 182 locations) with zero loss of spatial resolution inside Czechia: kept the full `0.25° × 0.35°` grid across Czechia and a `0.26°` cross-border interpolation buffer while skipping distant foreign points.
 - Updated `MapRenderer` grid cache keying with coordinate hashing so switching between full and alternative grids recomputes exact 4-NN IDW weights cleanly.
 - Updated the built-in **User Guide (`HelpDialog.cs`)** for v1.3.3.
 ### Fixed
